@@ -33,7 +33,7 @@ A simple, scalable cold email automation system built with FastAPI, Next.js, and
 
 4. **Initialize database**:
    ```bash
-   docker-compose exec db psql -U user -d email_automation -f /docker-entrypoint-initdb.d/schema.sql
+   docker-compose exec -T db psql -U user -d email_automation < database/schema.sql
    ```
 
 5. **Access the app**:

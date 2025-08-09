@@ -1,6 +1,6 @@
 // frontend/src/app/campaigns/new/page.tsx
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card'
 import { Button } from '../../../components/ui/button'
 
@@ -23,19 +23,19 @@ export default function NewCampaign() {
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(false)
 
-  useState(() => {
-    fetchLeads()
-  }, [])
+useEffect(() => {
+  fetchLeads()
+}, [])
 
-  const fetchLeads = async () => {
-    try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/leads`)
-      const data = await response.json()
-      setLeads(data)
-    } catch (error) {
-      console.error('Failed to fetch leads:', error)
-    }
+const fetchLeads = async () => {
+  try {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/leads`)
+    const data = await response.json()
+    setLeads(data)
+  } catch (error) {
+    console.error('Failed to fetch leads:', error)
   }
+}
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -46,7 +46,7 @@ export default function NewCampaign() {
 
     setLoading(true)
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/campaigns`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/campaigns`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

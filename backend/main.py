@@ -1,5 +1,5 @@
 # backend/main.py
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Date, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
@@ -17,11 +17,13 @@ app = FastAPI(title="Email Automation API", version="1.0.0")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "https://outreach.vezra.co.uk"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+api_router = APIRouter(prefix="/api")
 
 # Database setup
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/email_automation")
@@ -135,15 +137,15 @@ def get_db():
         db.close()
 
 # API Routes
-@app.get("/")
+@api_router.get("/")
 def read_root():
     return {"message": "Email Automation API", "version": "1.0.0"}
 
-@app.get("/health")
+@api_router.get("/health")
 def health_check():
     return {"status": "healthy"}
 
-@app.get("/dashboard", response_model=DashboardStats)
+@api_router.get("/dashboard", response_model=DashboardStats)
 def get_dashboard_stats(db: Session = Depends(get_db)):
     total_leads = db.query(Lead).filter(Lead.status == "active").count()
     active_campaigns = db.query(Campaign).filter(Campaign.status == "active").count()
@@ -162,12 +164,12 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         daily_limit=int(os.getenv("DAILY_EMAIL_LIMIT", 30))
     )
 
-@app.get("/leads", response_model=List[LeadResponse])
+@api_router.get("/leads", response_model=List[LeadResponse])
 def get_leads(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     leads = db.query(Lead).offset(skip).limit(limit).all()
     return leads
 
-@app.post("/leads", response_model=LeadResponse)
+@api_router.post("/leads", response_model=LeadResponse)
 def create_lead(lead: LeadCreate, db: Session = Depends(get_db)):
     # Check if lead already exists
     existing_lead = db.query(Lead).filter(Lead.email == lead.email).first()
@@ -180,12 +182,12 @@ def create_lead(lead: LeadCreate, db: Session = Depends(get_db)):
     db.refresh(db_lead)
     return db_lead
 
-@app.get("/campaigns", response_model=List[CampaignResponse])
+@api_router.get("/campaigns", response_model=List[CampaignResponse])
 def get_campaigns(db: Session = Depends(get_db)):
     campaigns = db.query(Campaign).all()
     return campaigns
 
-@app.post("/campaigns", response_model=CampaignResponse)
+@api_router.post("/campaigns", response_model=CampaignResponse)
 def create_campaign(campaign: CampaignCreate, db: Session = Depends(get_db)):
     # Create campaign
     db_campaign = Campaign(
@@ -210,7 +212,7 @@ def create_campaign(campaign: CampaignCreate, db: Session = Depends(get_db)):
     db.refresh(db_campaign)
     return db_campaign
 
-@app.post("/send-emails")
+@api_router.post("/send-emails")
 def trigger_email_send(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     from email_service import EmailService
     
@@ -287,7 +289,7 @@ def send_email_batch():
     finally:
         db.close()
 
-@app.get("/track/open/{pixel_id}")
+@api_router.get("/track/open/{pixel_id}")
 def track_email_open(pixel_id: str, db: Session = Depends(get_db)):
     """Track email opens via pixel"""
     campaign_lead = db.query(CampaignLead).filter(
@@ -309,7 +311,7 @@ def track_email_open(pixel_id: str, db: Session = Depends(get_db)):
     from fastapi.responses import Response
     pixel_data = bytes.fromhex('47494638396101000100800000000000ffffff21f90401000000002c000000000100010000020144003b')
     return Response(content=pixel_data, media_type="image/gif")
-
+app.include_router(api_router)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

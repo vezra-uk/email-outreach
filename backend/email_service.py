@@ -66,7 +66,7 @@ class EmailService:
         if not self.gmail_service:
             print("Gmail service not available")
             return False
-            
+        print(tracking_id)
         try:
             # Generate personalized content
             email_body = self.generate_personalized_email(
@@ -75,7 +75,7 @@ class EmailService:
             
             # Add tracking pixel
             domain = os.getenv("DOMAIN", "localhost:8000")
-            tracking_pixel = f'<img src="http://{domain}/track/open/{tracking_id}" width="1" height="1" style="display:none;">'
+            tracking_pixel = f'<img src="https://{domain}/api/track/open/{tracking_id}" width="1" height="1" style="display:none;">'
             email_body_with_tracking = email_body + tracking_pixel
             
             # Create email message

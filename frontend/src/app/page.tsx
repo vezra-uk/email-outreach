@@ -38,8 +38,8 @@ export default function Dashboard() {
   const fetchDashboardData = async () => {
     try {
       const [statsRes, campaignsRes] = await Promise.all([
-        fetch(`${process.env.NEXT_PUBLIC_API_URL}/dashboard`),
-        fetch(`${process.env.NEXT_PUBLIC_API_URL}/campaigns`)
+        fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/dashboard`),
+        fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/campaigns`)
       ])
       
       const statsData = await statsRes.json()
@@ -55,7 +55,7 @@ export default function Dashboard() {
   const triggerEmailSend = async () => {
     setLoading(true)
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/send-emails`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/send-emails`, {
         method: 'POST'
       })
       const result = await response.json()

@@ -33,7 +33,7 @@ export default function Leads() {
 
   const fetchLeads = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/leads`)
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/leads`)
       const data = await response.json()
       setLeads(data)
     } catch (error) {
@@ -44,7 +44,7 @@ export default function Leads() {
   const handleAddLead = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/leads`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/leads`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
