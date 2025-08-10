@@ -1,51 +1,56 @@
 version: '3.8'
+
 services:
   db:
-    image: postgres:15
+    image: postgres:15-alpine
     environment:
-      POSTGRES_DB: email_automation
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-    ports:
-      - "5432:5432"
+      - POSTGRES_DB=email_automation
+      - POSTGRES_USER=email_user
+      - POSTGRES_PASSWORD=email_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - email-automation
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d email_automation"]
+      test: ["CMD-SHELL", "pg_isready -U email_user -d email_automation"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   backend:
-    build: 
-      context: ./backend
-      dockerfile: Dockerfile
+    build: ./backend
     ports:
       - "8000:8000"
-    env_file:
-      - .env 
     environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/email_automation
+      - DATABASE_URL=postgresql://email_user:email_password@db:5432/email_automation
+    volumes:
+      # For development: mount source code for hot reload (optional)
+      - ./backend:/app
+    networks:
+      - email-automation
     depends_on:
       db:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: $NEXT_PUBLIC_API_URL
     ports:
       - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=https://outreach.vezra.co.uk
     depends_on:
       - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+    networks:
+      - email-automation
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+    driver: local
+
+networks:
+  email-automation:
+    driver: bridge

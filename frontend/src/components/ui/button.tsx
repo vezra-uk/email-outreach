@@ -1,12 +1,13 @@
 // frontend/src/components/ui/button.tsx
 import React from 'react'
 
-interface ButtonProps {
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   children: React.ReactNode
   onClick?: () => void
   variant?: 'default' | 'outline'
   disabled?: boolean
   className?: string
+  type?: 'button' | 'submit' | 'reset'
 }
 
 export const Button = ({ 
@@ -14,7 +15,9 @@ export const Button = ({
   onClick, 
   variant = 'default', 
   disabled = false,
-  className = ''
+  className = '',
+  type = 'button',
+  ...props
 }: ButtonProps) => {
   const baseClasses = 'px-4 py-2 rounded-md font-medium transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed'
   
@@ -25,9 +28,11 @@ export const Button = ({
   
   return (
     <button
+      type={type}
       onClick={onClick}
       disabled={disabled}
       className={`${baseClasses} ${variantClasses[variant]} ${className}`}
+      {...props}
     >
       {children}
     </button>
