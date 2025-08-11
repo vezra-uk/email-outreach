@@ -53,7 +53,7 @@ class EmailService:
                 max_tokens=500,
                 temperature=0.7
             )
-            prinr (response)
+            print (response)
             return response.choices[0].message.content
             
         except Exception as e:
