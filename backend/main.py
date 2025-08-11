@@ -1,7 +1,7 @@
-# backend/main.py
+# backend/main.py - Enhanced version with campaign progress tracking
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Date, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Date, ForeignKey, Numeric, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from pydantic import BaseModel
@@ -31,7 +31,7 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Database Models
+# Enhanced Database Models
 class Lead(Base):
     __tablename__ = "leads"
     
@@ -42,6 +42,8 @@ class Lead(Base):
     company = Column(String)
     title = Column(String)
     phone = Column(String)
+    website = Column(String)  # New field
+    industry = Column(String)  # New field
     status = Column(String, default="active")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
@@ -56,6 +58,12 @@ class Campaign(Base):
     ai_prompt = Column(Text)
     status = Column(String, default="active")
     daily_limit = Column(Integer, default=30)
+    total_leads = Column(Integer, default=0)
+    emails_sent = Column(Integer, default=0)
+    emails_opened = Column(Integer, default=0)
+    emails_clicked = Column(Integer, default=0)
+    completion_rate = Column(Numeric(5,2), default=0.00)
+    last_sent_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
@@ -81,7 +89,6 @@ class DailyStats(Base):
     links_clicked = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
-# Pydantic models
 class LeadCreate(BaseModel):
     email: str
     first_name: Optional[str] = None
@@ -89,6 +96,8 @@ class LeadCreate(BaseModel):
     company: Optional[str] = None
     title: Optional[str] = None
     phone: Optional[str] = None
+    website: Optional[str] = None  # New field
+    industry: Optional[str] = None  # New field
 
 class LeadResponse(BaseModel):
     id: int
@@ -97,6 +106,9 @@ class LeadResponse(BaseModel):
     last_name: Optional[str]
     company: Optional[str]
     title: Optional[str]
+    phone: Optional[str]
+    website: Optional[str]  # New field
+    industry: Optional[str]  # New field
     status: str
     created_at: datetime
 
@@ -110,16 +122,53 @@ class CampaignCreate(BaseModel):
     ai_prompt: str
     lead_ids: List[int]
 
+class CampaignProgress(BaseModel):
+    id: int
+    name: str
+    subject: str
+    status: str
+    total_leads: int
+    emails_sent: int
+    emails_opened: int
+    emails_clicked: int
+    completion_rate: float
+    open_rate: float
+    click_rate: float
+    last_sent_at: Optional[datetime]
+    created_at: datetime
+
 class CampaignResponse(BaseModel):
     id: int
     name: str
     subject: str
     template: str
     status: str
+    total_leads: int
+    emails_sent: int
+    emails_opened: int
+    completion_rate: float
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+class CampaignDetail(BaseModel):
+    id: int
+    name: str
+    subject: str
+    template: str
+    ai_prompt: str
+    status: str
+    total_leads: int
+    emails_sent: int
+    emails_opened: int
+    emails_clicked: int
+    completion_rate: float
+    open_rate: float
+    click_rate: float
+    last_sent_at: Optional[datetime]
+    created_at: datetime
+    leads: List[dict]
 
 class DashboardStats(BaseModel):
     total_leads: int
@@ -136,7 +185,7 @@ def get_db():
     finally:
         db.close()
 
-# API Routes
+# Enhanced API Routes
 @api_router.get("/")
 def read_root():
     return {"message": "Email Automation API", "version": "1.0.0"}
@@ -164,6 +213,155 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         daily_limit=int(os.getenv("DAILY_EMAIL_LIMIT", 30))
     )
 
+@api_router.get("/campaigns/progress", response_model=List[CampaignProgress])
+def get_campaigns_progress(db: Session = Depends(get_db)):
+    """Get campaign progress with stats"""
+    query = text("""
+        SELECT 
+            c.id,
+            c.name,
+            c.subject,
+            c.status,
+            c.created_at,
+            COALESCE(COUNT(cl.id), 0) as total_leads,
+            COALESCE(COUNT(CASE WHEN cl.status = 'sent' THEN 1 END), 0) as emails_sent,
+            COALESCE(COUNT(CASE WHEN cl.opens > 0 THEN 1 END), 0) as emails_opened,
+            COALESCE(COUNT(CASE WHEN cl.clicks > 0 THEN 1 END), 0) as emails_clicked,
+            CASE 
+                WHEN COUNT(cl.id) > 0 THEN 
+                    ROUND((COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) * 100.0 / COUNT(cl.id)), 2)
+                ELSE 0 
+            END as completion_rate,
+            CASE 
+                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
+                    ROUND((COUNT(CASE WHEN cl.opens > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
+                ELSE 0 
+            END as open_rate,
+            CASE 
+                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
+                    ROUND((COUNT(CASE WHEN cl.clicks > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
+                ELSE 0 
+            END as click_rate,
+            MAX(cl.sent_at) as last_sent_at
+        FROM campaigns c
+        LEFT JOIN campaign_leads cl ON c.id = cl.campaign_id
+        GROUP BY c.id, c.name, c.subject, c.status, c.created_at
+        ORDER BY c.created_at DESC
+    """)
+    
+    result = db.execute(query).fetchall()
+    
+    campaigns = []
+    for row in result:
+        campaigns.append(CampaignProgress(
+            id=row.id,
+            name=row.name,
+            subject=row.subject,
+            status=row.status,
+            total_leads=row.total_leads,
+            emails_sent=row.emails_sent,
+            emails_opened=row.emails_opened,
+            emails_clicked=row.emails_clicked,
+            completion_rate=float(row.completion_rate),
+            open_rate=float(row.open_rate),
+            click_rate=float(row.click_rate),
+            last_sent_at=row.last_sent_at,
+            created_at=row.created_at
+        ))
+    
+    return campaigns
+
+@api_router.get("/campaigns/{campaign_id}/detail", response_model=CampaignDetail)
+def get_campaign_detail(campaign_id: int, db: Session = Depends(get_db)):
+    """Get detailed campaign information including lead status"""
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    # Get campaign stats
+    query = text("""
+        SELECT 
+            COALESCE(COUNT(cl.id), 0) as total_leads,
+            COALESCE(COUNT(CASE WHEN cl.status = 'sent' THEN 1 END), 0) as emails_sent,
+            COALESCE(COUNT(CASE WHEN cl.opens > 0 THEN 1 END), 0) as emails_opened,
+            COALESCE(COUNT(CASE WHEN cl.clicks > 0 THEN 1 END), 0) as emails_clicked,
+            CASE 
+                WHEN COUNT(cl.id) > 0 THEN 
+                    ROUND((COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) * 100.0 / COUNT(cl.id)), 2)
+                ELSE 0 
+            END as completion_rate,
+            CASE 
+                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
+                    ROUND((COUNT(CASE WHEN cl.opens > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
+                ELSE 0 
+            END as open_rate,
+            CASE 
+                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
+                    ROUND((COUNT(CASE WHEN cl.clicks > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
+                ELSE 0 
+            END as click_rate,
+            MAX(cl.sent_at) as last_sent_at
+        FROM campaign_leads cl
+        WHERE cl.campaign_id = :campaign_id
+    """)
+    
+    stats = db.execute(query, {"campaign_id": campaign_id}).fetchone()
+    
+    # Get leads with their status
+    leads_query = text("""
+        SELECT 
+            l.id,
+            l.email,
+            l.first_name,
+            l.last_name,
+            l.company,
+            l.title,
+            cl.status as campaign_status,
+            cl.sent_at,
+            cl.opens,
+            cl.clicks
+        FROM campaign_leads cl
+        JOIN leads l ON cl.lead_id = l.id
+        WHERE cl.campaign_id = :campaign_id
+        ORDER BY cl.created_at DESC
+    """)
+    
+    leads_result = db.execute(leads_query, {"campaign_id": campaign_id}).fetchall()
+    
+    leads = []
+    for lead in leads_result:
+        leads.append({
+            "id": lead.id,
+            "email": lead.email,
+            "first_name": lead.first_name,
+            "last_name": lead.last_name,
+            "company": lead.company,
+            "title": lead.title,
+            "status": lead.campaign_status,
+            "sent_at": lead.sent_at,
+            "opens": lead.opens,
+            "clicks": lead.clicks
+        })
+    
+    return CampaignDetail(
+        id=campaign.id,
+        name=campaign.name,
+        subject=campaign.subject,
+        template=campaign.template,
+        ai_prompt=campaign.ai_prompt,
+        status=campaign.status,
+        total_leads=stats.total_leads if stats else 0,
+        emails_sent=stats.emails_sent if stats else 0,
+        emails_opened=stats.emails_opened if stats else 0,
+        emails_clicked=stats.emails_clicked if stats else 0,
+        completion_rate=float(stats.completion_rate) if stats else 0,
+        open_rate=float(stats.open_rate) if stats else 0,
+        click_rate=float(stats.click_rate) if stats else 0,
+        last_sent_at=stats.last_sent_at if stats else None,
+        created_at=campaign.created_at,
+        leads=leads
+    )
+
 @api_router.get("/leads", response_model=List[LeadResponse])
 def get_leads(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     leads = db.query(Lead).offset(skip).limit(limit).all()
@@ -182,6 +380,68 @@ def create_lead(lead: LeadCreate, db: Session = Depends(get_db)):
     db.refresh(db_lead)
     return db_lead
 
+@api_router.get("/leads/industries")
+def get_industries(db: Session = Depends(get_db)):
+    """Get list of unique industries for filtering"""
+    industries = db.query(Lead.industry).filter(
+        Lead.industry.isnot(None), 
+        Lead.industry != ""
+    ).distinct().all()
+    return [industry[0] for industry in industries if industry[0]]
+
+@api_router.get("/leads/filter")
+def filter_leads(
+    industry: Optional[str] = None,
+    company: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db)
+):
+    """Filter leads by industry, company, etc."""
+    query = db.query(Lead)
+    
+    if industry:
+        query = query.filter(Lead.industry.ilike(f"%{industry}%"))
+    
+    if company:
+        query = query.filter(Lead.company.ilike(f"%{company}%"))
+    
+    leads = query.offset(skip).limit(limit).all()
+    return leads
+
+@api_router.post("/leads/bulk")
+def create_leads_bulk(leads: List[LeadCreate], db: Session = Depends(get_db)):
+    """Create multiple leads at once"""
+    created_leads = []
+    errors = []
+    
+    for lead_data in leads:
+        try:
+            # Check if lead already exists
+            existing_lead = db.query(Lead).filter(Lead.email == lead_data.email).first()
+            if existing_lead:
+                errors.append(f"Lead with email {lead_data.email} already exists")
+                continue
+            
+            db_lead = Lead(**lead_data.dict())
+            db.add(db_lead)
+            db.flush()  # Get ID without committing
+            created_leads.append(db_lead)
+            
+        except Exception as e:
+            errors.append(f"Error creating lead {lead_data.email}: {str(e)}")
+    
+    if created_leads:
+        db.commit()
+        for lead in created_leads:
+            db.refresh(lead)
+    
+    return {
+        "created": len(created_leads),
+        "errors": errors,
+        "leads": created_leads
+    }
+
 @api_router.get("/campaigns", response_model=List[CampaignResponse])
 def get_campaigns(db: Session = Depends(get_db)):
     campaigns = db.query(Campaign).all()
@@ -194,7 +454,8 @@ def create_campaign(campaign: CampaignCreate, db: Session = Depends(get_db)):
         name=campaign.name,
         subject=campaign.subject,
         template=campaign.template,
-        ai_prompt=campaign.ai_prompt
+        ai_prompt=campaign.ai_prompt,
+        total_leads=len(campaign.lead_ids)
     )
     db.add(db_campaign)
     db.flush()  # Get the ID without committing
@@ -311,7 +572,9 @@ def track_email_open(pixel_id: str, db: Session = Depends(get_db)):
     from fastapi.responses import Response
     pixel_data = bytes.fromhex('47494638396101000100800000000000ffffff21f90401000000002c000000000100010000020144003b')
     return Response(content=pixel_data, media_type="image/gif")
+
 app.include_router(api_router)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
