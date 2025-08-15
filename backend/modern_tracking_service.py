@@ -133,9 +133,9 @@ class ModernOpenTracker:
         
         total_confidence = 0.0
         signal_weights = {
-            'primary': 0.2,
-            'secondary': 0.3,
-            'content': 0.3,
+            'primary': 0.4,
+            'secondary': 0.5,
+            'content': 0.5,
             'interactive': 0.8,  # High weight for clicks
             'javascript': 0.7,   # High weight for JS execution
             'view_browser': 0.9  # Very high weight for browser views
@@ -232,7 +232,7 @@ class ModernOpenTracker:
         confidence_score = self.calculate_confidence_score(signals, send_time)
         
         # Determine if opened based on confidence threshold
-        is_opened = confidence_score > 0.5
+        is_opened = confidence_score > 0.3
         
         # Detailed analysis
         signal_types = [s.signal_type for s in signals]

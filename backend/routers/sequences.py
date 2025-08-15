@@ -18,7 +18,7 @@ from schemas.sequence import (
 
 router = APIRouter(prefix="/sequences", tags=["sequences"])
 
-@router.post("/", response_model=EmailSequenceResponse)
+@router.post("", response_model=EmailSequenceResponse)
 def create_sequence(sequence: EmailSequenceCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Create a new email sequence with steps"""
     try:
@@ -55,7 +55,7 @@ def create_sequence(sequence: EmailSequenceCreate, db: Session = Depends(get_db)
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Failed to create sequence: {str(e)}")
 
-@router.get("/", response_model=List[EmailSequenceResponse])
+@router.get("", response_model=List[EmailSequenceResponse])
 def get_sequences(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Get all email sequences"""
     sequences = db.query(EmailSequence).filter(EmailSequence.status == "active").all()
@@ -275,6 +275,15 @@ def remove_lead_from_sequence(sequence_id: int, lead_id: int, db: Session = Depe
 @router.post("/send")
 def trigger_sequence_emails(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Trigger sending of all due sequence emails"""
-    # This would typically queue up emails for sending
-    # For now, just return a success message
-    return {"message": "Sequence emails queued for sending"}
+    from services.email_batch import send_sequence_batch
+    
+    try:
+        result = send_sequence_batch()
+        return {
+            "message": "Sequence emails processed successfully",
+            "emails_sent": result.get("emails_sent", 0),
+            "sequences_processed": result.get("sequences_processed", 0),
+            "errors": result.get("errors", [])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send sequence emails: {str(e)}")

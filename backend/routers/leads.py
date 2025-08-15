@@ -4,13 +4,13 @@ from typing import List, Optional
 from datetime import datetime
 
 from database import get_db
-from models import Lead, User
+from models import Lead, User, SequenceEmail, LeadSequence, EmailSequence, CampaignLead, Campaign
 from schemas.lead import LeadCreate, LeadUpdate, LeadResponse
 from dependencies import get_current_active_user
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
-@router.get("/", response_model=List[LeadResponse])
+@router.get("", response_model=List[LeadResponse])
 def get_leads(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     leads = db.query(Lead).offset(skip).limit(limit).all()
     return leads
@@ -43,6 +43,146 @@ def filter_leads(
     leads = query.offset(skip).limit(limit).all()
     return leads
 
+@router.get("/opened-emails")  
+def get_leads_who_opened_emails(
+    sequence_id: Optional[int] = None,
+    campaign_id: Optional[int] = None,
+    days: Optional[int] = 30,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    try:
+        from datetime import datetime, timedelta
+        
+        print(f"get_leads_who_opened_emails called with: sequence_id={sequence_id}, campaign_id={campaign_id}, days={days}")
+        
+        result = []
+        cutoff_date = None
+        if days:
+            cutoff_date = datetime.utcnow() - timedelta(days=days)
+        
+        # Get sequence opens
+        if not campaign_id:  # Include sequences unless specifically asking for campaigns
+            sequence_emails = db.query(SequenceEmail).filter(SequenceEmail.opens > 0)
+            if cutoff_date:
+                sequence_emails = sequence_emails.filter(SequenceEmail.sent_at >= cutoff_date)
+            
+            for se in sequence_emails.all():
+                # Get lead sequence info
+                lead_sequence = db.query(LeadSequence).filter(LeadSequence.id == se.lead_sequence_id).first()
+                if not lead_sequence:
+                    continue
+                    
+                # Filter by sequence_id if specified
+                if sequence_id and lead_sequence.sequence_id != sequence_id:
+                    continue
+                
+                # Get lead info
+                lead = db.query(Lead).filter(Lead.id == lead_sequence.lead_id).first()
+                if not lead:
+                    continue
+                
+                # Get sequence info
+                sequence_info = db.query(EmailSequence).filter(EmailSequence.id == lead_sequence.sequence_id).first()
+                
+                # Check if lead already in results
+                existing_lead = next((r for r in result if r["id"] == lead.id), None)
+                if existing_lead:
+                    existing_lead["opens_data"].append({
+                        "type": "sequence",
+                        "name": sequence_info.name if sequence_info else "Unknown",
+                        "id": lead_sequence.sequence_id,
+                        "opens": se.opens,
+                        "sent_at": se.sent_at.isoformat() if se.sent_at else None,
+                        "tracking_id": se.tracking_pixel_id
+                    })
+                    existing_lead["total_opens"] += se.opens
+                else:
+                    result.append({
+                        "id": lead.id,
+                        "email": lead.email,
+                        "first_name": lead.first_name,
+                        "last_name": lead.last_name,
+                        "company": lead.company,
+                        "title": lead.title,
+                        "industry": lead.industry,
+                        "opens_data": [{
+                            "type": "sequence",
+                            "name": sequence_info.name if sequence_info else "Unknown",
+                            "id": lead_sequence.sequence_id,
+                            "opens": se.opens,
+                            "sent_at": se.sent_at.isoformat() if se.sent_at else None,
+                            "tracking_id": se.tracking_pixel_id
+                        }],
+                        "total_opens": se.opens
+                    })
+        
+        # Get campaign opens
+        if not sequence_id:  # Include campaigns unless specifically asking for sequences
+            campaign_leads = db.query(CampaignLead).filter(CampaignLead.opens > 0)
+            if cutoff_date:
+                campaign_leads = campaign_leads.filter(CampaignLead.sent_at >= cutoff_date)
+            if campaign_id:
+                campaign_leads = campaign_leads.filter(CampaignLead.campaign_id == campaign_id)
+            
+            for cl in campaign_leads.all():
+                # Get lead info
+                lead = db.query(Lead).filter(Lead.id == cl.lead_id).first()
+                if not lead:
+                    continue
+                
+                # Get campaign info
+                campaign_info = db.query(Campaign).filter(Campaign.id == cl.campaign_id).first()
+                
+                # Check if lead already in results
+                existing_lead = next((r for r in result if r["id"] == lead.id), None)
+                if existing_lead:
+                    existing_lead["opens_data"].append({
+                        "type": "campaign",
+                        "name": campaign_info.name if campaign_info else "Unknown",
+                        "id": cl.campaign_id,
+                        "opens": cl.opens,
+                        "sent_at": cl.sent_at.isoformat() if cl.sent_at else None,
+                        "tracking_id": cl.tracking_pixel_id
+                    })
+                    existing_lead["total_opens"] += cl.opens
+                else:
+                    result.append({
+                        "id": lead.id,
+                        "email": lead.email,
+                        "first_name": lead.first_name,
+                        "last_name": lead.last_name,
+                        "company": lead.company,
+                        "title": lead.title,
+                        "industry": lead.industry,
+                        "opens_data": [{
+                            "type": "campaign",
+                            "name": campaign_info.name if campaign_info else "Unknown",
+                            "id": cl.campaign_id,
+                            "opens": cl.opens,
+                            "sent_at": cl.sent_at.isoformat() if cl.sent_at else None,
+                            "tracking_id": cl.tracking_pixel_id
+                        }],
+                        "total_opens": cl.opens
+                    })
+        
+        # Apply pagination
+        total = len(result)
+        result = result[skip:skip + limit]
+        
+        return {
+            "leads": result,
+            "total": total
+        }
+        
+    except Exception as e:
+        import traceback
+        print(f"Error in get_leads_who_opened_emails: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 @router.get("/{lead_id}", response_model=LeadResponse)
 def get_lead(lead_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
@@ -50,7 +190,7 @@ def get_lead(lead_id: int, db: Session = Depends(get_db), current_user: User = D
         raise HTTPException(status_code=404, detail="Lead not found")
     return lead
 
-@router.post("/", response_model=LeadResponse)
+@router.post("", response_model=LeadResponse)
 def create_lead(lead: LeadCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     existing_lead = db.query(Lead).filter(Lead.email == lead.email).first()
     if existing_lead:

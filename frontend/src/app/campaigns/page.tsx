@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
-import { Plus, Eye, Mail, Users, Activity, Clock, BarChart3, MousePointer } from 'lucide-react'
+import { Plus, Eye, Mail, Users, Activity, Clock, BarChart3, MousePointer, Trash2 } from 'lucide-react'
 import ClickAnalytics from '../../components/ClickAnalytics'
+import LeadOpensTracker from '../../components/LeadOpensTracker'
 import { withAuth } from '../../contexts/AuthContext'
 import { apiClient } from '../../utils/api'
 
@@ -145,6 +146,33 @@ function CampaignsPage() {
     } catch (error) {
       console.error('Failed to reactivate campaign:', error)
       alert(`Failed to reactivate campaign: ${error.message}`)
+    }
+  }
+
+  const permanentlyDeleteCampaign = async (campaignId: number, campaignName: string) => {
+    const confirmation = prompt(`⚠️ DANGER: This will permanently delete "${campaignName}" and ALL its data including lead records. This CANNOT be undone.\n\nType "DELETE" to confirm:`)
+    
+    if (confirmation !== 'DELETE') {
+      return
+    }
+    
+    try {
+      const response = await apiClient.delete(`/api/campaigns/${campaignId}/permanent`)
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      
+      const result = await response.json()
+      alert(`Campaign permanently deleted: ${result.campaign_leads_deleted} lead records removed.`)
+      
+      // Refresh both lists
+      fetchCampaigns()
+      if (showArchived) {
+        fetchArchivedCampaigns()
+      }
+    } catch (error) {
+      console.error('Failed to delete campaign:', error)
+      alert(`Failed to delete campaign: ${error.message}`)
     }
   }
 
@@ -354,6 +382,11 @@ function CampaignsPage() {
             </CardContent>
           </Card>
 
+          {/* Email Opens Tracking */}
+          <div className="mt-8">
+            <LeadOpensTracker campaignId={selectedCampaign.id} showFilters={false} />
+          </div>
+
           {/* Click Analytics */}
           <div className="mt-8">
             <Card>
@@ -523,16 +556,28 @@ function CampaignsPage() {
                       </>
                     )}
                     {showArchived && (
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={() => reactivateCampaign(campaign.id)}
-                        disabled={loading}
-                        className="text-blue-600 hover:text-blue-700"
-                        title="Reactivate Campaign"
-                      >
-                        ↩️
-                      </Button>
+                      <>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={() => reactivateCampaign(campaign.id)}
+                          disabled={loading}
+                          className="text-blue-600 hover:text-blue-700"
+                          title="Reactivate Campaign"
+                        >
+                          ↩️
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={() => permanentlyDeleteCampaign(campaign.id, campaign.name)}
+                          disabled={loading}
+                          className="text-red-600 hover:text-red-700 border-red-200 hover:border-red-300"
+                          title="Permanently Delete Campaign"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </>
                     )}
                   </div>
                 </CardContent>

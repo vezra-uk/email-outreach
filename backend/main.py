@@ -117,6 +117,8 @@ def track_signal(
     user_agent = request.headers.get("user-agent", "")
     ip_address = request.client.host if request.client else ""
     
+    print(f"Tracking signal for ID: {tracking_id}, type: {signal_type}")
+    
     send_time = None
     campaign_lead = db.query(CampaignLead).filter(
         CampaignLead.tracking_pixel_id == tracking_id
@@ -125,6 +127,8 @@ def track_signal(
     sequence_email = db.query(SequenceEmail).filter(
         SequenceEmail.tracking_pixel_id == tracking_id
     ).first()
+    
+    print(f"Found campaign_lead: {campaign_lead is not None}, sequence_email: {sequence_email is not None}")
     
     if campaign_lead and campaign_lead.sent_at:
         send_time = campaign_lead.sent_at
@@ -138,10 +142,12 @@ def track_signal(
     )
     
     analysis = modern_tracker.get_open_analysis(tracking_id, send_time)
+    print(f"Open analysis confidence: {analysis['confidence_score']}")
     
-    if analysis['confidence_score'] > 0.5:
+    if analysis['confidence_score'] > 0.3:
         if campaign_lead:
             campaign_lead.opens = max(campaign_lead.opens, 1)
+            print(f"Updated campaign_lead opens to: {campaign_lead.opens}")
             today = date.today()
             daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
             if not daily_stats:
@@ -152,6 +158,7 @@ def track_signal(
         
         elif sequence_email:
             sequence_email.opens = max(sequence_email.opens, 1)
+            print(f"Updated sequence_email opens to: {sequence_email.opens}")
             today = date.today()
             daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
             if not daily_stats:
@@ -161,6 +168,7 @@ def track_signal(
                 daily_stats.emails_opened += 1
         
         db.commit()
+        print("Database committed tracking changes")
     
     if signal_type in ['primary', 'secondary', 'content']:
         pixel_data = bytes.fromhex('47494638396101000100800000000000ffffff21f90401000000002c000000000100010000020144003b')

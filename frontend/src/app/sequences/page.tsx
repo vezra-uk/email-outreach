@@ -72,6 +72,20 @@ function SequencesPage() {
     }
   };
 
+  const deleteSequence = async (sequenceId: number, sequenceName: string) => {
+    if (confirm(`Are you sure you want to delete the sequence "${sequenceName}"? This cannot be undone.`)) {
+      try {
+        await apiClient.delete(`/api/sequences/${sequenceId}`);
+        alert('Sequence deleted successfully!');
+        fetchSequences(); // Refresh the list
+      } catch (error) {
+        console.error('Error deleting sequence:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to delete sequence';
+        alert(`Failed to delete sequence: ${errorMessage}`);
+      }
+    }
+  };
+
   if (loading) {
     return <div className="p-8">Loading sequences...</div>;
   }
@@ -146,9 +160,19 @@ function SequencesPage() {
                 <span className="text-xs text-gray-500">
                   Created {new Date(sequence.created_at).toLocaleDateString()}
                 </span>
-                <Link href={`/sequences/${sequence.id}`}>
-                  <Button variant="outline" size="sm">View Details</Button>
-                </Link>
+                <div className="space-x-2">
+                  <Link href={`/sequences/${sequence.id}`}>
+                    <Button variant="outline" size="sm">View Details</Button>
+                  </Link>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => deleteSequence(sequence.id, sequence.name)}
+                    className="text-red-600 hover:text-red-700 hover:border-red-300"
+                  >
+                    Delete
+                  </Button>
+                </div>
               </div>
             </Card>
           ))}

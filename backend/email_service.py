@@ -283,9 +283,11 @@ End with this signature:
             # Convert plain URLs to anchor tags (excluding already linked URLs)
             url_pattern = r'(?<!href=["\'\'`])(?<!src=["\'\'`])(https?://[^\s<>"]+)'
             email_body = re.sub(url_pattern, r'<a href="\1">\1</a>', email_body)
+            print(f"Sequence email after URL conversion: {email_body}")
             
             # Track all links in the email (both existing and newly created)
             email_body_with_tracking = re.sub(r'href="([^"]+)"', replace_links, email_body)
+            print(f"Sequence email after link tracking: {email_body_with_tracking}")
             
             # Add multi-signal tracking elements
             email_body_with_tracking += f'''
@@ -396,8 +398,9 @@ FORMAT REQUIREMENTS:
 1. Start with "SUBJECT: [your subject line]"
 2. Then write the email body
 3. Keep it professional and personalized
-4. Use HTML formatting for the body
-5. End with the sender signature
+4. Use HTML formatting with proper paragraph tags (<p></p>) for the body
+5. Break content into 2-3 short paragraphs for readability
+6. End with the sender signature
 
 SUBJECT LINE GUIDELINES:
 - Be specific and relevant to {lead_company if lead_company else 'their business'}

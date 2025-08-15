@@ -15,8 +15,21 @@ class ApiClient {
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
+  private normalizeUrl(endpoint: string): string {
+    // Universal fix: Always remove trailing slashes to prevent 307 redirects
+    // Remove leading slash if present
+    let cleanEndpoint = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
+    
+    // Remove trailing slash if present
+    if (cleanEndpoint.endsWith('/')) {
+      cleanEndpoint = cleanEndpoint.slice(0, -1);
+    }
+    
+    return `${this.baseUrl}/${cleanEndpoint}`;
+  }
+
   async request(endpoint: string, options: ApiRequestOptions = {}): Promise<Response> {
-    const url = `${this.baseUrl}${endpoint}`;
+    const url = this.normalizeUrl(endpoint);
     
     const config: RequestInit = {
       ...options,
@@ -25,18 +38,36 @@ class ApiClient {
         ...this.getAuthHeaders(),
         ...options.headers,
       },
+      // Enable automatic redirect handling
+      redirect: 'follow'
     };
 
-    const response = await fetch(url, config);
+    try {
+      const response = await fetch(url, config);
 
-    // Handle 401 Unauthorized - redirect to login
-    if (response.status === 401) {
-      localStorage.removeItem('auth_token');
-      window.location.reload();
-      throw new Error('Authentication required');
+      // Handle 401 Unauthorized - redirect to login
+      if (response.status === 401) {
+        localStorage.removeItem('auth_token');
+        window.location.reload();
+        throw new Error('Authentication required');
+      }
+
+      // Handle other 3xx redirects that fetch might not handle automatically
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (location) {
+          // Retry with the redirect URL
+          const redirectUrl = location.startsWith('http') ? location : `${this.baseUrl}${location}`;
+          return fetch(redirectUrl, config);
+        }
+      }
+
+      return response;
+    } catch (error) {
+      // Log the error for debugging but don't retry since we have universal normalization
+      console.error('API request failed:', { url, error });
+      throw error;
     }
-
-    return response;
   }
 
   async get(endpoint: string, options?: ApiRequestOptions): Promise<Response> {
@@ -67,7 +98,16 @@ class ApiClient {
   async getJson<T>(endpoint: string): Promise<T> {
     const response = await this.get(endpoint);
     if (!response.ok) {
-      throw new Error(`API request failed: ${response.statusText}`);
+      let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
+      try {
+        const errorData = await response.json();
+        if (errorData.detail) {
+          errorMessage += ` - ${errorData.detail}`;
+        }
+      } catch {
+        // If we can't parse the error response, use the default message
+      }
+      throw new Error(errorMessage);
     }
     return response.json();
   }
@@ -75,7 +115,16 @@ class ApiClient {
   async postJson<T>(endpoint: string, data?: any): Promise<T> {
     const response = await this.post(endpoint, data);
     if (!response.ok) {
-      throw new Error(`API request failed: ${response.statusText}`);
+      let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
+      try {
+        const errorData = await response.json();
+        if (errorData.detail) {
+          errorMessage += ` - ${JSON.stringify(errorData.detail)}`;
+        }
+      } catch {
+        // If we can't parse the error response, use the default message
+      }
+      throw new Error(errorMessage);
     }
     return response.json();
   }
@@ -83,7 +132,16 @@ class ApiClient {
   async putJson<T>(endpoint: string, data?: any): Promise<T> {
     const response = await this.put(endpoint, data);
     if (!response.ok) {
-      throw new Error(`API request failed: ${response.statusText}`);
+      let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
+      try {
+        const errorData = await response.json();
+        if (errorData.detail) {
+          errorMessage += ` - ${JSON.stringify(errorData.detail)}`;
+        }
+      } catch {
+        // If we can't parse the error response, use the default message
+      }
+      throw new Error(errorMessage);
     }
     return response.json();
   }

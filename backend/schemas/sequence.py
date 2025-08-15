@@ -5,8 +5,8 @@ from datetime import datetime
 class SequenceStepCreate(BaseModel):
     step_number: int
     name: str
-    subject: str
-    template: str
+    subject: Optional[str] = None
+    template: Optional[str] = None
     ai_prompt: Optional[str] = None
     delay_days: int = 0
     delay_hours: int = 0
@@ -15,9 +15,9 @@ class SequenceStepResponse(BaseModel):
     id: int
     step_number: int
     name: str
-    subject: str
-    template: str
-    ai_prompt: Optional[str]
+    subject: Optional[str] = None
+    template: Optional[str] = None
+    ai_prompt: Optional[str] = None
     delay_days: int
     delay_hours: int
     is_active: bool

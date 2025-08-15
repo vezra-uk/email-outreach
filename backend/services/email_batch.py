@@ -7,7 +7,7 @@ from database import SessionLocal
 from models import (
     Campaign, Lead, CampaignLead, DailyStats,
     LeadSequence, SequenceStep, SequenceEmail, EmailReply,
-    EmailSequence
+    EmailSequence, SendingProfile
 )
 
 def send_email_batch():
@@ -39,7 +39,6 @@ def send_email_batch():
                 
                 sending_profile = None
                 if campaign.sending_profile_id:
-                    from models import SendingProfile
                     sending_profile = db.query(SendingProfile).filter(SendingProfile.id == campaign.sending_profile_id).first()
                 
                 success = email_service.send_personalized_email(
@@ -76,12 +75,18 @@ def send_sequence_batch():
     db = SessionLocal()
     email_service = EmailService()
     
+    emails_sent = 0
+    sequences_processed = 0
+    errors = []
+    
     try:
         now = datetime.utcnow()
         due_sequences = db.query(LeadSequence).filter(
             LeadSequence.status == "active",
             LeadSequence.next_send_at <= now
         ).limit(50).all()
+        
+        sequences_processed = len(due_sequences)
         
         for lead_seq in due_sequences:
             try:
@@ -101,6 +106,11 @@ def send_sequence_batch():
                 
                 if not lead or not sequence or lead.status != "active":
                     continue
+                
+                # Get sending profile for the sequence
+                sending_profile = None
+                if sequence.sending_profile_id:
+                    sending_profile = db.query(SendingProfile).filter(SendingProfile.id == sequence.sending_profile_id).first()
                 
                 reply_check = db.query(EmailReply).filter(
                     EmailReply.lead_id == lead.id,
@@ -124,7 +134,8 @@ def send_sequence_batch():
                 success = email_service.send_sequence_email(
                     lead=lead,
                     step=current_step,
-                    tracking_id=tracking_id
+                    tracking_id=tracking_id,
+                    sending_profile=sending_profile
                 )
                 
                 if success:
@@ -156,14 +167,24 @@ def send_sequence_batch():
                         daily_stats = DailyStats(date=today, emails_sent=0)
                         db.add(daily_stats)
                     daily_stats.emails_sent += 1
+                    emails_sent += 1
                     
                 else:
                     sequence_email.status = "failed"
+                    errors.append(f"Failed to send email for lead {lead_seq.lead_id}")
                     
             except Exception as e:
-                print(f"Failed to send sequence email for lead {lead_seq.lead_id}: {e}")
+                error_msg = f"Failed to send sequence email for lead {lead_seq.lead_id}: {e}"
+                print(error_msg)
+                errors.append(error_msg)
         
         db.commit()
+        
+        return {
+            "emails_sent": emails_sent,
+            "sequences_processed": sequences_processed,
+            "errors": errors
+        }
         
     finally:
         db.close()

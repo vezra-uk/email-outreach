@@ -7,13 +7,12 @@ import { Button } from '@/components/ui/button';
 import { withAuth } from '../../../contexts/AuthContext';
 import { apiClient } from '@/utils/api';
 import { Lead } from '@/types';
+import LeadOpensTracker from '@/components/LeadOpensTracker';
 
 interface SequenceStep {
   id: number;
   step_number: number;
   name: string;
-  subject: string;
-  template: string;
   ai_prompt?: string;
   delay_days: number;
   delay_hours: number;
@@ -105,6 +104,22 @@ function SequenceDetailPage() {
     }
   };
 
+  const deleteSequence = async () => {
+    if (!sequence) return;
+    
+    if (confirm(`Are you sure you want to delete the sequence "${sequence.name}"? This cannot be undone.`)) {
+      try {
+        await apiClient.delete(`/api/sequences/${sequenceId}`);
+        alert('Sequence deleted successfully!');
+        router.push('/sequences');
+      } catch (error) {
+        console.error('Error deleting sequence:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to delete sequence';
+        alert(`Failed to delete sequence: ${errorMessage}`);
+      }
+    }
+  };
+
   const toggleLead = (leadId: number) => {
     setSelectedLeads(prev =>
       prev.includes(leadId)
@@ -145,6 +160,13 @@ function SequenceDetailPage() {
             variant="outline"
           >
             Add Leads
+          </Button>
+          <Button 
+            onClick={deleteSequence}
+            variant="outline"
+            className="text-red-600 hover:text-red-700 hover:border-red-300"
+          >
+            Delete Sequence
           </Button>
           <Button onClick={() => router.push('/sequences')}>
             Back to Sequences
@@ -190,6 +212,11 @@ function SequenceDetailPage() {
         </Card>
       )}
 
+      {/* Email Opens Tracking */}
+      <div className="mb-8">
+        <LeadOpensTracker sequenceId={parseInt(sequenceId)} showFilters={false} />
+      </div>
+
       {/* Sequence Steps */}
       <Card className="p-6">
         <h2 className="text-xl font-semibold mb-6">Email Steps</h2>
@@ -217,22 +244,14 @@ function SequenceDetailPage() {
                 </div>
               </div>
               
-              <div className="mb-4">
-                <strong>Subject:</strong> {step.subject}
-              </div>
-              
-              <div className="mb-4">
-                <strong>Template:</strong>
-                <div className="mt-2 p-3 bg-gray-50 rounded-md text-sm whitespace-pre-wrap">
-                  {step.template}
-                </div>
-              </div>
-              
               {step.ai_prompt && (
                 <div>
-                  <strong>AI Prompt:</strong>
+                  <strong>AI Generation Instructions:</strong>
                   <div className="mt-2 p-3 bg-blue-50 rounded-md text-sm">
                     {step.ai_prompt}
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    💡 The AI will generate both subject line and email content based on these instructions for each lead.
                   </div>
                 </div>
               )}

@@ -13,7 +13,7 @@ from dependencies import get_current_active_user
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
-@router.get("/", response_model=List[CampaignResponse])
+@router.get("", response_model=List[CampaignResponse])
 def get_campaigns(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     campaigns = db.query(Campaign).all()
     return campaigns
@@ -164,7 +164,7 @@ def get_campaign_detail(campaign_id: int, db: Session = Depends(get_db), current
         leads=leads
     )
 
-@router.post("/", response_model=CampaignResponse)
+@router.post("", response_model=CampaignResponse)
 def create_campaign(campaign: CampaignCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     db_campaign = Campaign(
         name=campaign.name,
@@ -245,6 +245,32 @@ def reactivate_campaign(campaign_id: int, db: Session = Depends(get_db), current
     db.commit()
     
     return {"message": "Campaign reactivated"}
+
+@router.delete("/{campaign_id}/permanent")
+def permanently_delete_campaign(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Permanently delete a campaign and all associated data"""
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    try:
+        # Delete related campaign leads first (due to foreign key constraints)
+        campaign_leads_count = db.query(CampaignLead).filter(CampaignLead.campaign_id == campaign_id).count()
+        db.query(CampaignLead).filter(CampaignLead.campaign_id == campaign_id).delete()
+        
+        # Delete the campaign itself
+        db.delete(campaign)
+        db.commit()
+        
+        return {
+            "message": "Campaign permanently deleted successfully",
+            "campaign_name": campaign.name,
+            "campaign_leads_deleted": campaign_leads_count
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete campaign: {str(e)}")
 
 @router.get("/archived", response_model=List[CampaignProgress])
 def get_archived_campaigns(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):

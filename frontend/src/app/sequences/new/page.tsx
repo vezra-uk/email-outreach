@@ -150,7 +150,7 @@ const fetchProfiles = async () => {
 
     try {
       // Create sequence
-      const sequence = await apiClient.postJson<CreatedSequence>('/api/sequences', {
+      const sequence = await apiClient.postJson<CreatedSequence>('/api/sequences/', {
         name: sequenceData.name,
         description: sequenceData.description,
         sending_profile_id: sequenceData.sending_profile_id,
@@ -159,7 +159,7 @@ const fetchProfiles = async () => {
 
       // Add leads to sequence if any selected
       if (selectedLeads.length > 0) {
-        await apiClient.post(`/api/sequences/${sequence.id}/leads`, {
+        await apiClient.post(`/api/sequences/${sequence.id}/leads/`, {
           lead_ids: selectedLeads,
           sequence_id: sequence.id,
         });
@@ -327,8 +327,8 @@ const fetchProfiles = async () => {
                 />
                 <p className="text-sm text-gray-500 mt-1">
                   {step.step_number === 1 
-                    ? "This is the first email in the sequence. Focus on making a great first impression."
-                    : `This is email #${step.step_number} in the sequence. The AI will automatically have context of previous emails when generating this one.`}
+                    ? "This is the first email in the sequence. The AI will generate both subject line and email content based on these instructions."
+                    : `This is email #${step.step_number} in the sequence. The AI will automatically have context of previous emails and generate both subject and content.`}
                 </p>
               </div>
 

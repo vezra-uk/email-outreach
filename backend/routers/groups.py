@@ -12,7 +12,7 @@ from dependencies import get_current_active_user
 
 router = APIRouter(prefix="/groups", tags=["groups"])
 
-@router.get("/", response_model=List[LeadGroupResponse])
+@router.get("", response_model=List[LeadGroupResponse])
 def get_groups(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     groups = db.query(
         LeadGroup,
@@ -33,7 +33,7 @@ def get_groups(db: Session = Depends(get_db), current_user: User = Depends(get_c
         for group, lead_count in groups
     ]
 
-@router.post("/", response_model=LeadGroupResponse)
+@router.post("", response_model=LeadGroupResponse)
 def create_group(group: LeadGroupCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     db_group = LeadGroup(**group.dict())
     db.add(db_group)

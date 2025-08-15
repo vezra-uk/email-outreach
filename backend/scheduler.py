@@ -97,8 +97,8 @@ class EmailScheduler:
         # Schedule daily campaign sends at 9 AM
         schedule.every().day.at("09:00").do(self.send_daily_batch)
         
-        # Schedule sequence emails every 30 minutes
-        schedule.every(30).minutes.do(self.send_sequence_emails)
+        # Schedule sequence emails every 5 minutes
+        schedule.every(5).minutes.do(self.send_sequence_emails)
         
         # For testing - also allow manual trigger every minute
         # schedule.every(1).minutes.do(self.send_daily_batch)
