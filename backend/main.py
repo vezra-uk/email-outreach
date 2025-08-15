@@ -1,20 +1,21 @@
-# backend/main.py - Enhanced version with campaign progress tracking
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, APIRouter
+# backend/main.py - Refactored modular version
+from fastapi import FastAPI, APIRouter, BackgroundTasks, Depends, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Date, ForeignKey, Numeric, text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
-from pydantic import BaseModel
-from typing import List, Optional
-import os
+from fastapi.responses import Response, HTMLResponse, RedirectResponse
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 from datetime import datetime, date
-from dotenv import load_dotenv
+from urllib.parse import unquote
+from typing import Optional
+import os
 
-load_dotenv()
+from database import get_db
+from models import *
+from schemas import *
+from dependencies import get_current_active_user, get_current_user_optional
 
 app = FastAPI(title="Email Automation API", version="1.0.0")
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "https://outreach.vezra.co.uk"],
@@ -25,167 +26,6 @@ app.add_middleware(
 
 api_router = APIRouter(prefix="/api")
 
-# Database setup
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/email_automation")
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-# Enhanced Database Models
-class Lead(Base):
-    __tablename__ = "leads"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True)
-    first_name = Column(String)
-    last_name = Column(String)
-    company = Column(String)
-    title = Column(String)
-    phone = Column(String)
-    website = Column(String)  # New field
-    industry = Column(String)  # New field
-    status = Column(String, default="active")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow)
-
-class Campaign(Base):
-    __tablename__ = "campaigns"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String)
-    subject = Column(String)
-    template = Column(Text)
-    ai_prompt = Column(Text)
-    status = Column(String, default="active")
-    daily_limit = Column(Integer, default=30)
-    total_leads = Column(Integer, default=0)
-    emails_sent = Column(Integer, default=0)
-    emails_opened = Column(Integer, default=0)
-    emails_clicked = Column(Integer, default=0)
-    completion_rate = Column(Numeric(5,2), default=0.00)
-    last_sent_at = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow)
-
-class CampaignLead(Base):
-    __tablename__ = "campaign_leads"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    campaign_id = Column(Integer, ForeignKey("campaigns.id"))
-    lead_id = Column(Integer, ForeignKey("leads.id"))
-    status = Column(String, default="pending")
-    sent_at = Column(DateTime)
-    opens = Column(Integer, default=0)
-    clicks = Column(Integer, default=0)
-    tracking_pixel_id = Column(String, unique=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-class DailyStats(Base):
-    __tablename__ = "daily_stats"
-    
-    date = Column(Date, primary_key=True)
-    emails_sent = Column(Integer, default=0)
-    emails_opened = Column(Integer, default=0)
-    links_clicked = Column(Integer, default=0)
-    updated_at = Column(DateTime, default=datetime.utcnow)
-
-class LeadCreate(BaseModel):
-    email: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    company: Optional[str] = None
-    title: Optional[str] = None
-    phone: Optional[str] = None
-    website: Optional[str] = None  # New field
-    industry: Optional[str] = None  # New field
-
-class LeadResponse(BaseModel):
-    id: int
-    email: str
-    first_name: Optional[str]
-    last_name: Optional[str]
-    company: Optional[str]
-    title: Optional[str]
-    phone: Optional[str]
-    website: Optional[str]  # New field
-    industry: Optional[str]  # New field
-    status: str
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-class CampaignCreate(BaseModel):
-    name: str
-    subject: str
-    template: str
-    ai_prompt: str
-    lead_ids: List[int]
-
-class CampaignProgress(BaseModel):
-    id: int
-    name: str
-    subject: str
-    status: str
-    total_leads: int
-    emails_sent: int
-    emails_opened: int
-    emails_clicked: int
-    completion_rate: float
-    open_rate: float
-    click_rate: float
-    last_sent_at: Optional[datetime]
-    created_at: datetime
-
-class CampaignResponse(BaseModel):
-    id: int
-    name: str
-    subject: str
-    template: str
-    status: str
-    total_leads: int
-    emails_sent: int
-    emails_opened: int
-    completion_rate: float
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-class CampaignDetail(BaseModel):
-    id: int
-    name: str
-    subject: str
-    template: str
-    ai_prompt: str
-    status: str
-    total_leads: int
-    emails_sent: int
-    emails_opened: int
-    emails_clicked: int
-    completion_rate: float
-    open_rate: float
-    click_rate: float
-    last_sent_at: Optional[datetime]
-    created_at: datetime
-    leads: List[dict]
-
-class DashboardStats(BaseModel):
-    total_leads: int
-    emails_sent_today: int
-    emails_opened_today: int
-    active_campaigns: int
-    daily_limit: int
-
-# Database dependency
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-# Enhanced API Routes
 @api_router.get("/")
 def read_root():
     return {"message": "Email Automation API", "version": "1.0.0"}
@@ -194,384 +34,219 @@ def read_root():
 def health_check():
     return {"status": "healthy"}
 
-@api_router.get("/dashboard", response_model=DashboardStats)
-def get_dashboard_stats(db: Session = Depends(get_db)):
-    total_leads = db.query(Lead).filter(Lead.status == "active").count()
-    active_campaigns = db.query(Campaign).filter(Campaign.status == "active").count()
-    
-    today = date.today()
-    daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
-    
-    emails_sent_today = daily_stats.emails_sent if daily_stats else 0
-    emails_opened_today = daily_stats.emails_opened if daily_stats else 0
-    
-    return DashboardStats(
-        total_leads=total_leads,
-        emails_sent_today=emails_sent_today,
-        emails_opened_today=emails_opened_today,
-        active_campaigns=active_campaigns,
-        daily_limit=int(os.getenv("DAILY_EMAIL_LIMIT", 30))
-    )
+# Import and include routers
+from routers.leads import router as leads_router
+from routers.csv_upload import router as csv_router
+from routers.campaigns import router as campaigns_router
+from routers.dashboard import router as dashboard_router
+from routers.sequences import router as sequences_router
+from routers.groups import router as groups_router
+from routers.sending_profiles import router as sending_profiles_router
+from routers.auth import router as auth_router
 
-@api_router.get("/campaigns/progress", response_model=List[CampaignProgress])
-def get_campaigns_progress(db: Session = Depends(get_db)):
-    """Get campaign progress with stats"""
-    query = text("""
-        SELECT 
-            c.id,
-            c.name,
-            c.subject,
-            c.status,
-            c.created_at,
-            COALESCE(COUNT(cl.id), 0) as total_leads,
-            COALESCE(COUNT(CASE WHEN cl.status = 'sent' THEN 1 END), 0) as emails_sent,
-            COALESCE(COUNT(CASE WHEN cl.opens > 0 THEN 1 END), 0) as emails_opened,
-            COALESCE(COUNT(CASE WHEN cl.clicks > 0 THEN 1 END), 0) as emails_clicked,
-            CASE 
-                WHEN COUNT(cl.id) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) * 100.0 / COUNT(cl.id)), 2)
-                ELSE 0 
-            END as completion_rate,
-            CASE 
-                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.opens > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
-                ELSE 0 
-            END as open_rate,
-            CASE 
-                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.clicks > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
-                ELSE 0 
-            END as click_rate,
-            MAX(cl.sent_at) as last_sent_at
-        FROM campaigns c
-        LEFT JOIN campaign_leads cl ON c.id = cl.campaign_id
-        GROUP BY c.id, c.name, c.subject, c.status, c.created_at
-        ORDER BY c.created_at DESC
-    """)
-    
-    result = db.execute(query).fetchall()
-    
-    campaigns = []
-    for row in result:
-        campaigns.append(CampaignProgress(
-            id=row.id,
-            name=row.name,
-            subject=row.subject,
-            status=row.status,
-            total_leads=row.total_leads,
-            emails_sent=row.emails_sent,
-            emails_opened=row.emails_opened,
-            emails_clicked=row.emails_clicked,
-            completion_rate=float(row.completion_rate),
-            open_rate=float(row.open_rate),
-            click_rate=float(row.click_rate),
-            last_sent_at=row.last_sent_at,
-            created_at=row.created_at
-        ))
-    
-    return campaigns
+api_router.include_router(auth_router)
+api_router.include_router(leads_router)
+api_router.include_router(csv_router)
+api_router.include_router(campaigns_router)
+api_router.include_router(dashboard_router)
+api_router.include_router(sequences_router)
+api_router.include_router(groups_router)
+api_router.include_router(sending_profiles_router)
 
-@api_router.get("/campaigns/{campaign_id}/detail", response_model=CampaignDetail)
-def get_campaign_detail(campaign_id: int, db: Session = Depends(get_db)):
-    """Get detailed campaign information including lead status"""
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    
-    # Get campaign stats
-    query = text("""
-        SELECT 
-            COALESCE(COUNT(cl.id), 0) as total_leads,
-            COALESCE(COUNT(CASE WHEN cl.status = 'sent' THEN 1 END), 0) as emails_sent,
-            COALESCE(COUNT(CASE WHEN cl.opens > 0 THEN 1 END), 0) as emails_opened,
-            COALESCE(COUNT(CASE WHEN cl.clicks > 0 THEN 1 END), 0) as emails_clicked,
-            CASE 
-                WHEN COUNT(cl.id) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) * 100.0 / COUNT(cl.id)), 2)
-                ELSE 0 
-            END as completion_rate,
-            CASE 
-                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.opens > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
-                ELSE 0 
-            END as open_rate,
-            CASE 
-                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.clicks > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
-                ELSE 0 
-            END as click_rate,
-            MAX(cl.sent_at) as last_sent_at
-        FROM campaign_leads cl
-        WHERE cl.campaign_id = :campaign_id
-    """)
-    
-    stats = db.execute(query, {"campaign_id": campaign_id}).fetchone()
-    
-    # Get leads with their status
-    leads_query = text("""
-        SELECT 
-            l.id,
-            l.email,
-            l.first_name,
-            l.last_name,
-            l.company,
-            l.title,
-            cl.status as campaign_status,
-            cl.sent_at,
-            cl.opens,
-            cl.clicks
-        FROM campaign_leads cl
-        JOIN leads l ON cl.lead_id = l.id
-        WHERE cl.campaign_id = :campaign_id
-        ORDER BY cl.created_at DESC
-    """)
-    
-    leads_result = db.execute(leads_query, {"campaign_id": campaign_id}).fetchall()
-    
-    leads = []
-    for lead in leads_result:
-        leads.append({
-            "id": lead.id,
-            "email": lead.email,
-            "first_name": lead.first_name,
-            "last_name": lead.last_name,
-            "company": lead.company,
-            "title": lead.title,
-            "status": lead.campaign_status,
-            "sent_at": lead.sent_at,
-            "opens": lead.opens,
-            "clicks": lead.clicks
-        })
-    
-    return CampaignDetail(
-        id=campaign.id,
-        name=campaign.name,
-        subject=campaign.subject,
-        template=campaign.template,
-        ai_prompt=campaign.ai_prompt,
-        status=campaign.status,
-        total_leads=stats.total_leads if stats else 0,
-        emails_sent=stats.emails_sent if stats else 0,
-        emails_opened=stats.emails_opened if stats else 0,
-        emails_clicked=stats.emails_clicked if stats else 0,
-        completion_rate=float(stats.completion_rate) if stats else 0,
-        open_rate=float(stats.open_rate) if stats else 0,
-        click_rate=float(stats.click_rate) if stats else 0,
-        last_sent_at=stats.last_sent_at if stats else None,
-        created_at=campaign.created_at,
-        leads=leads
-    )
-
-@api_router.get("/leads", response_model=List[LeadResponse])
-def get_leads(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    leads = db.query(Lead).offset(skip).limit(limit).all()
-    return leads
-
-@api_router.post("/leads", response_model=LeadResponse)
-def create_lead(lead: LeadCreate, db: Session = Depends(get_db)):
-    # Check if lead already exists
-    existing_lead = db.query(Lead).filter(Lead.email == lead.email).first()
-    if existing_lead:
-        raise HTTPException(status_code=400, detail="Lead with this email already exists")
-    
-    db_lead = Lead(**lead.dict())
-    db.add(db_lead)
-    db.commit()
-    db.refresh(db_lead)
-    return db_lead
-
-@api_router.get("/leads/industries")
-def get_industries(db: Session = Depends(get_db)):
-    """Get list of unique industries for filtering"""
-    industries = db.query(Lead.industry).filter(
-        Lead.industry.isnot(None), 
-        Lead.industry != ""
-    ).distinct().all()
-    return [industry[0] for industry in industries if industry[0]]
-
-@api_router.get("/leads/filter")
-def filter_leads(
-    industry: Optional[str] = None,
-    company: Optional[str] = None,
-    skip: int = 0,
-    limit: int = 100,
-    db: Session = Depends(get_db)
-):
-    """Filter leads by industry, company, etc."""
-    query = db.query(Lead)
-    
-    if industry:
-        query = query.filter(Lead.industry.ilike(f"%{industry}%"))
-    
-    if company:
-        query = query.filter(Lead.company.ilike(f"%{company}%"))
-    
-    leads = query.offset(skip).limit(limit).all()
-    return leads
-
-@api_router.post("/leads/bulk")
-def create_leads_bulk(leads: List[LeadCreate], db: Session = Depends(get_db)):
-    """Create multiple leads at once"""
-    created_leads = []
-    errors = []
-    
-    for lead_data in leads:
-        try:
-            # Check if lead already exists
-            existing_lead = db.query(Lead).filter(Lead.email == lead_data.email).first()
-            if existing_lead:
-                errors.append(f"Lead with email {lead_data.email} already exists")
-                continue
-            
-            db_lead = Lead(**lead_data.dict())
-            db.add(db_lead)
-            db.flush()  # Get ID without committing
-            created_leads.append(db_lead)
-            
-        except Exception as e:
-            errors.append(f"Error creating lead {lead_data.email}: {str(e)}")
-    
-    if created_leads:
-        db.commit()
-        for lead in created_leads:
-            db.refresh(lead)
-    
-    return {
-        "created": len(created_leads),
-        "errors": errors,
-        "leads": created_leads
-    }
-
-@api_router.get("/campaigns", response_model=List[CampaignResponse])
-def get_campaigns(db: Session = Depends(get_db)):
-    campaigns = db.query(Campaign).all()
-    return campaigns
-
-@api_router.post("/campaigns", response_model=CampaignResponse)
-def create_campaign(campaign: CampaignCreate, db: Session = Depends(get_db)):
-    # Create campaign
-    db_campaign = Campaign(
-        name=campaign.name,
-        subject=campaign.subject,
-        template=campaign.template,
-        ai_prompt=campaign.ai_prompt,
-        total_leads=len(campaign.lead_ids)
-    )
-    db.add(db_campaign)
-    db.flush()  # Get the ID without committing
-    
-    # Add leads to campaign
-    for lead_id in campaign.lead_ids:
-        campaign_lead = CampaignLead(
-            campaign_id=db_campaign.id,
-            lead_id=lead_id,
-            tracking_pixel_id=f"pixel_{db_campaign.id}_{lead_id}"
-        )
-        db.add(campaign_lead)
-    
-    db.commit()
-    db.refresh(db_campaign)
-    return db_campaign
-
-@api_router.post("/send-emails")
-def trigger_email_send(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+# Message Preview Endpoint
+@api_router.post("/preview-message", response_model=MessagePreviewResponse)
+def preview_personalized_message(preview_request: MessagePreviewRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     from email_service import EmailService
     
-    # Check daily limit
-    today = date.today()
-    daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
-    if not daily_stats:
-        daily_stats = DailyStats(date=today)
-        db.add(daily_stats)
-        db.commit()
+    lead = db.query(Lead).filter(Lead.id == preview_request.lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
     
-    daily_limit = int(os.getenv("DAILY_EMAIL_LIMIT", 30))
-    if daily_stats.emails_sent >= daily_limit:
-        raise HTTPException(status_code=400, detail="Daily email limit reached")
+    sending_profile = None
+    if preview_request.sending_profile_id:
+        sending_profile = db.query(SendingProfile).filter(SendingProfile.id == preview_request.sending_profile_id).first()
     
-    # Add background task
-    background_tasks.add_task(send_email_batch)
-    return {"message": "Email sending started", "remaining": daily_limit - daily_stats.emails_sent}
-
-def send_email_batch():
-    """Background task to send email batch"""
-    from email_service import EmailService
-    
-    db = SessionLocal()
     email_service = EmailService()
     
     try:
-        today = date.today()
-        daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
-        daily_limit = int(os.getenv("DAILY_EMAIL_LIMIT", 30))
-        
-        remaining = daily_limit - (daily_stats.emails_sent if daily_stats else 0)
-        if remaining <= 0:
-            return
-        
-        # Get pending campaign leads
-        pending = db.query(CampaignLead).join(Campaign).join(Lead).filter(
-            CampaignLead.status == "pending",
-            Campaign.status == "active",
-            Lead.status == "active"
-        ).limit(remaining).all()
-        
-        for campaign_lead in pending:
-            try:
-                # Get campaign and lead data
-                campaign = db.query(Campaign).filter(Campaign.id == campaign_lead.campaign_id).first()
-                lead = db.query(Lead).filter(Lead.id == campaign_lead.lead_id).first()
-                
-                # Generate and send email
-                success = email_service.send_personalized_email(
-                    lead=lead,
-                    campaign=campaign,
-                    tracking_id=campaign_lead.tracking_pixel_id
-                )
-                
-                if success:
-                    campaign_lead.status = "sent"
-                    campaign_lead.sent_at = datetime.utcnow()
-                    
-                    # Update daily stats
-                    if not daily_stats:
-                        daily_stats = DailyStats(date=today, emails_sent=0)
-                        db.add(daily_stats)
-                    daily_stats.emails_sent += 1
-                else:
-                    campaign_lead.status = "failed"
-                
-            except Exception as e:
-                print(f"Failed to send email to {lead.email}: {e}")
-                campaign_lead.status = "failed"
-        
-        db.commit()
-        
-    finally:
-        db.close()
+        email_data = email_service.generate_personalized_email_and_subject(
+            lead=lead,
+            ai_prompt=preview_request.ai_prompt,
+            sending_profile=sending_profile
+        )
+        personalized_message = email_data['content']
+        subject = email_data['subject']
+    except Exception as e:
+        personalized_message = preview_request.template.replace(
+            "{first_name}", lead.first_name or "there"
+        ).replace(
+            "{company}", lead.company or "your company"
+        ).replace(
+            "{last_name}", lead.last_name or ""
+        ).replace(
+            "{email}", lead.email
+        )
+        subject = f"Quick question about {lead.company or 'your business'}"
+    
+    lead_info = {
+        "id": lead.id,
+        "email": lead.email,
+        "first_name": lead.first_name,
+        "last_name": lead.last_name,
+        "company": lead.company,
+        "title": lead.title
+    }
+    
+    return MessagePreviewResponse(
+        original_template=preview_request.template,
+        personalized_message=personalized_message,
+        subject=subject,
+        lead_info=lead_info
+    )
 
-@api_router.get("/track/open/{pixel_id}")
-def track_email_open(pixel_id: str, db: Session = Depends(get_db)):
-    """Track email opens via pixel"""
+# Tracking Endpoints (keeping these in main.py for now as they're complex)
+@api_router.get("/track/signal/{tracking_id}/{signal_type}")
+def track_signal(
+    tracking_id: str, 
+    signal_type: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    from modern_tracking_service import modern_tracker
+    
+    user_agent = request.headers.get("user-agent", "")
+    ip_address = request.client.host if request.client else ""
+    
+    send_time = None
     campaign_lead = db.query(CampaignLead).filter(
-        CampaignLead.tracking_pixel_id == pixel_id
+        CampaignLead.tracking_pixel_id == tracking_id
     ).first()
     
-    if campaign_lead:
-        campaign_lead.opens += 1
+    sequence_email = db.query(SequenceEmail).filter(
+        SequenceEmail.tracking_pixel_id == tracking_id
+    ).first()
+    
+    if campaign_lead and campaign_lead.sent_at:
+        send_time = campaign_lead.sent_at
+    elif sequence_email and sequence_email.sent_at:
+        send_time = sequence_email.sent_at
+    else:
+        send_time = datetime.utcnow()
+    
+    signal = modern_tracker.record_tracking_signal(
+        tracking_id, signal_type, user_agent, ip_address, send_time
+    )
+    
+    analysis = modern_tracker.get_open_analysis(tracking_id, send_time)
+    
+    if analysis['confidence_score'] > 0.5:
+        if campaign_lead:
+            campaign_lead.opens = max(campaign_lead.opens, 1)
+            today = date.today()
+            daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
+            if not daily_stats:
+                daily_stats = DailyStats(date=today, emails_opened=1)
+                db.add(daily_stats)
+            else:
+                daily_stats.emails_opened += 1
         
-        # Update daily stats
-        today = date.today()
-        daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
-        if daily_stats:
-            daily_stats.emails_opened += 1
+        elif sequence_email:
+            sequence_email.opens = max(sequence_email.opens, 1)
+            today = date.today()
+            daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
+            if not daily_stats:
+                daily_stats = DailyStats(date=today, emails_opened=1)
+                db.add(daily_stats)
+            else:
+                daily_stats.emails_opened += 1
         
         db.commit()
     
-    # Return 1x1 transparent pixel
-    from fastapi.responses import Response
-    pixel_data = bytes.fromhex('47494638396101000100800000000000ffffff21f90401000000002c000000000100010000020144003b')
-    return Response(content=pixel_data, media_type="image/gif")
+    if signal_type in ['primary', 'secondary', 'content']:
+        pixel_data = bytes.fromhex('47494638396101000100800000000000ffffff21f90401000000002c000000000100010000020144003b')
+        return Response(
+            content=pixel_data, 
+            media_type="image/gif",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache", 
+                "Expires": "0",
+                "Access-Control-Allow-Origin": "*"
+            }
+        )
+    elif signal_type == 'js':
+        return Response(
+            content='{"status":"tracked"}',
+            media_type="application/json",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Access-Control-Allow-Origin": "*"
+            }
+        )
+    else:
+        return {"status": "tracked", "confidence": analysis['confidence_score']}
+
+@api_router.get("/track/click/{tracking_id}")
+def track_link_click(tracking_id: str, url: str, request: Request, db: Session = Depends(get_db)):
+    from modern_tracking_service import modern_tracker
+    
+    user_agent = request.headers.get("user-agent", "")
+    ip_address = request.client.host if request.client else ""
+    referer = request.headers.get("referer", "")
+    original_url = unquote(url)
+    
+    campaign_lead = db.query(CampaignLead).filter(
+        CampaignLead.tracking_pixel_id == tracking_id
+    ).first()
+    
+    sequence_email = db.query(SequenceEmail).filter(
+        SequenceEmail.tracking_pixel_id == tracking_id
+    ).first()
+    
+    send_time = datetime.utcnow()
+    
+    if campaign_lead:
+        send_time = campaign_lead.sent_at if campaign_lead.sent_at else send_time
+        campaign_lead.clicks += 1
+        
+        link_click = LinkClick(
+            tracking_id=tracking_id,
+            campaign_lead_id=campaign_lead.id,
+            original_url=original_url,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            referer=referer
+        )
+        db.add(link_click)
+        
+    elif sequence_email:
+        send_time = sequence_email.sent_at if sequence_email.sent_at else send_time
+        sequence_email.clicks += 1
+        
+        link_click = LinkClick(
+            tracking_id=tracking_id,
+            sequence_email_id=sequence_email.id,
+            original_url=original_url,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            referer=referer
+        )
+        db.add(link_click)
+    
+    db.commit()
+    
+    signal = modern_tracker.record_tracking_signal(
+        tracking_id, 'interactive', user_agent, ip_address, send_time
+    )
+    
+    return RedirectResponse(url=original_url, status_code=302)
+
+# Legacy endpoint for backwards compatibility
+@api_router.get("/track/open/{pixel_id}")
+def track_email_open_legacy(pixel_id: str, request: Request, db: Session = Depends(get_db)):
+    return track_signal(pixel_id, "primary", request, db)
+
+# Sequences endpoints moved to sequences router
 
 app.include_router(api_router)
 

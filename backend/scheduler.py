@@ -5,7 +5,7 @@ import os
 from datetime import date
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from main import DailyStats, CampaignLead, Campaign, Lead
+from main import DailyStats, CampaignLead, Campaign, Lead, LeadSequence, SendingProfile, send_sequence_batch
 from email_service import EmailService
 
 class EmailScheduler:
@@ -49,10 +49,16 @@ class EmailScheduler:
                     campaign = db.query(Campaign).filter(Campaign.id == campaign_lead.campaign_id).first()
                     lead = db.query(Lead).filter(Lead.id == campaign_lead.lead_id).first()
                     
+                    # Get sending profile if specified
+                    sending_profile = None
+                    if campaign.sending_profile_id:
+                        sending_profile = db.query(SendingProfile).filter(SendingProfile.id == campaign.sending_profile_id).first()
+                    
                     success = self.email_service.send_personalized_email(
                         lead=lead,
                         campaign=campaign,
-                        tracking_id=campaign_lead.tracking_pixel_id
+                        tracking_id=campaign_lead.tracking_pixel_id,
+                        sending_profile=sending_profile
                     )
                     
                     if success:
@@ -75,15 +81,28 @@ class EmailScheduler:
         finally:
             db.close()
     
+    def send_sequence_emails(self):
+        """Send sequence emails that are due"""
+        try:
+            print("Checking for sequence emails to send...")
+            send_sequence_batch()
+            print("Sequence email batch completed")
+        except Exception as e:
+            print(f"Error in sequence email batch: {e}")
+    
     def start_scheduler(self):
         """Start the email scheduler"""
         print("Starting email scheduler...")
         
-        # Schedule daily sends at 9 AM
+        # Schedule daily campaign sends at 9 AM
         schedule.every().day.at("09:00").do(self.send_daily_batch)
+        
+        # Schedule sequence emails every 30 minutes
+        schedule.every(30).minutes.do(self.send_sequence_emails)
         
         # For testing - also allow manual trigger every minute
         # schedule.every(1).minutes.do(self.send_daily_batch)
+        # schedule.every(1).minutes.do(self.send_sequence_emails)
         
         while True:
             schedule.run_pending()

@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Plus, Mail, Users, Activity, Eye, BarChart3, TrendingUp } from 'lucide-react'
+import { withAuth } from '../contexts/AuthContext'
+import { apiClient } from '../utils/api'
 
 interface DashboardStats {
   total_leads: number
@@ -29,7 +31,7 @@ interface Campaign {
   created_at: string
 }
 
-export default function Dashboard() {
+function Dashboard() {
   const [stats, setStats] = useState<DashboardStats>({
     total_leads: 0,
     emails_sent_today: 0,
@@ -46,12 +48,12 @@ export default function Dashboard() {
 
   const fetchDashboardData = async () => {
     try {
-      const [statsRes, campaignsRes] = await Promise.all([
-        fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/dashboard`),
-        fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/campaigns/progress`)
+      const [stats, campaigns] = await Promise.all([
+        apiClient.getJson<DashboardStats>('/api/dashboard'),
+        apiClient.getJson<Campaign[]>('/api/campaigns/progress')
       ])
-      setStats(await statsRes.json())
-      setCampaigns(await campaignsRes.json())
+      setStats(stats)
+      setCampaigns(campaigns)
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error)
     }
@@ -60,16 +62,9 @@ export default function Dashboard() {
   const triggerEmailSend = async () => {
     setLoading(true)
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/send-emails`, {
-        method: 'POST'
-      })
-      const result = await response.json()
-      if (response.ok) {
-        alert(`Email sending started! ${result.message}`)
-        fetchDashboardData()
-      } else {
-        alert(`Error: ${result.detail}`)
-      }
+      const result = await apiClient.postJson<{message: string}>('/api/send-emails')
+      alert(`Email sending started! ${result.message}`)
+      fetchDashboardData()
     } catch {
       alert('Failed to trigger email send')
     } finally {
@@ -365,3 +360,5 @@ export default function Dashboard() {
     </div>
   )
 }
+
+export default withAuth(Dashboard)

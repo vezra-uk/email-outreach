@@ -3,7 +3,10 @@
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
-import { Plus, Eye, Mail, Users, Activity, Clock, BarChart3 } from 'lucide-react'
+import { Plus, Eye, Mail, Users, Activity, Clock, BarChart3, MousePointer } from 'lucide-react'
+import ClickAnalytics from '../../components/ClickAnalytics'
+import { withAuth } from '../../contexts/AuthContext'
+import { apiClient } from '../../utils/api'
 
 interface Campaign {
   id: number
@@ -51,10 +54,12 @@ interface CampaignDetail {
   }>
 }
 
-export default function CampaignsPage() {
+function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
+  const [archivedCampaigns, setArchivedCampaigns] = useState<Campaign[]>([])
   const [selectedCampaign, setSelectedCampaign] = useState<CampaignDetail | null>(null)
   const [showDetail, setShowDetail] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -63,25 +68,83 @@ export default function CampaignsPage() {
 
   const fetchCampaigns = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/campaigns/progress`)
-      const data = await response.json()
+      const data = await apiClient.getJson<Campaign[]>('/api/campaigns/progress')
       setCampaigns(data)
     } catch (error) {
       console.error('Failed to fetch campaigns:', error)
     }
   }
 
+  const fetchArchivedCampaigns = async () => {
+    try {
+      const data = await apiClient.getJson<Campaign[]>('/api/campaigns/archived')
+      setArchivedCampaigns(data)
+    } catch (error) {
+      console.error('Failed to fetch archived campaigns:', error)
+    }
+  }
+
   const fetchCampaignDetail = async (campaignId: number) => {
     setLoading(true)
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/campaigns/${campaignId}/detail`)
-      const data = await response.json()
+      const data = await apiClient.getJson<CampaignDetail>(`/api/campaigns/${campaignId}/detail`)
       setSelectedCampaign(data)
       setShowDetail(true)
     } catch (error) {
       console.error('Failed to fetch campaign detail:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const completeCampaign = async (campaignId: number) => {
+    try {
+      const response = await apiClient.put(`/api/campaigns/${campaignId}/complete`)
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      alert('Campaign marked as complete!')
+      fetchCampaigns() // Refresh the active list
+      if (showArchived) {
+        fetchArchivedCampaigns() // Refresh archived list if viewing
+      }
+    } catch (error) {
+      console.error('Failed to complete campaign:', error)
+      alert(`Failed to complete campaign: ${error.message}`)
+    }
+  }
+
+  const archiveCampaign = async (campaignId: number) => {
+    if (confirm('Are you sure you want to archive this campaign? It will be removed from the main dashboard.')) {
+      try {
+        const response = await apiClient.put(`/api/campaigns/${campaignId}/archive`)
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        }
+        alert('Campaign archived!')
+        fetchCampaigns() // Refresh the active list
+        if (showArchived) {
+          fetchArchivedCampaigns() // Refresh archived list if viewing
+        }
+      } catch (error) {
+        console.error('Failed to archive campaign:', error)
+        alert(`Failed to archive campaign: ${error.message}`)
+      }
+    }
+  }
+
+  const reactivateCampaign = async (campaignId: number) => {
+    try {
+      const response = await apiClient.put(`/api/campaigns/${campaignId}/reactivate`)
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      alert('Campaign reactivated!')
+      fetchCampaigns() // Refresh the active list
+      fetchArchivedCampaigns() // Refresh archived list
+    } catch (error) {
+      console.error('Failed to reactivate campaign:', error)
+      alert(`Failed to reactivate campaign: ${error.message}`)
     }
   }
 
@@ -99,6 +162,7 @@ export default function CampaignsPage() {
       case 'active': return 'bg-green-100 text-green-800'
       case 'paused': return 'bg-yellow-100 text-yellow-800'
       case 'completed': return 'bg-blue-100 text-blue-800'
+      case 'archived': return 'bg-gray-100 text-gray-600'
       case 'draft': return 'bg-gray-100 text-gray-600'
       default: return 'bg-gray-100 text-gray-600'
     }
@@ -289,6 +353,21 @@ export default function CampaignsPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Click Analytics */}
+          <div className="mt-8">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <MousePointer className="h-5 w-5" />
+                  Click Analytics
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ClickAnalytics campaignId={selectedCampaign.id} />
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
     )
@@ -308,7 +387,39 @@ export default function CampaignsPage() {
           </Button>
         </header>
 
-        {campaigns.length === 0 ? (
+        {/* Tab Navigation */}
+        <div className="mb-6">
+          <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg w-fit">
+            <button
+              onClick={() => {
+                setShowArchived(false)
+                fetchCampaigns()
+              }}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                !showArchived 
+                  ? 'bg-white text-gray-900 shadow-sm' 
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Active Campaigns ({campaigns.length})
+            </button>
+            <button
+              onClick={() => {
+                setShowArchived(true)
+                fetchArchivedCampaigns()
+              }}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                showArchived 
+                  ? 'bg-white text-gray-900 shadow-sm' 
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Archived ({archivedCampaigns.length})
+            </button>
+          </div>
+        </div>
+
+        {(showArchived ? archivedCampaigns : campaigns).length === 0 ? (
           <Card>
             <CardContent className="text-center py-12">
               <BarChart3 className="mx-auto w-16 h-16 text-gray-400 mb-4" />
@@ -322,7 +433,7 @@ export default function CampaignsPage() {
           </Card>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-            {campaigns.map(campaign => (
+            {(showArchived ? archivedCampaigns : campaigns).map(campaign => (
               <Card key={campaign.id} className="hover:shadow-lg transition-shadow">
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between">
@@ -387,6 +498,42 @@ export default function CampaignsPage() {
                       <Eye className="w-3 h-3 mr-1" />
                       View Details
                     </Button>
+                    {!showArchived && (
+                      <>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={() => completeCampaign(campaign.id)}
+                          disabled={loading}
+                          className="text-green-600 hover:text-green-700"
+                          title="Mark as Complete"
+                        >
+                          ✓
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={() => archiveCampaign(campaign.id)}
+                          disabled={loading}
+                          className="text-red-600 hover:text-red-700"
+                          title="Archive Campaign"
+                        >
+                          📦
+                        </Button>
+                      </>
+                    )}
+                    {showArchived && (
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => reactivateCampaign(campaign.id)}
+                        disabled={loading}
+                        className="text-blue-600 hover:text-blue-700"
+                        title="Reactivate Campaign"
+                      >
+                        ↩️
+                      </Button>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -397,3 +544,5 @@ export default function CampaignsPage() {
     </div>
   )
 }
+
+export default withAuth(CampaignsPage)

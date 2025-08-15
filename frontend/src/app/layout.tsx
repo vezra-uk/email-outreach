@@ -1,6 +1,7 @@
 // frontend/src/app/layout.tsx
 import './globals.css'
 import Header from '../components/header'
+import { AuthProvider } from '../contexts/AuthContext'
 
 export const metadata = {
   title: 'Email Automation System',
@@ -15,10 +16,12 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <Header />
-        <main>
-          {children}
-        </main>
+        <AuthProvider>
+          <Header />
+          <main>
+            {children}
+          </main>
+        </AuthProvider>
       </body>
     </html>
   )
