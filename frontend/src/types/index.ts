@@ -33,25 +33,32 @@ export interface SendingProfile {
   is_default: boolean;
 }
 
-export interface SequenceStep {
+export interface CampaignStep {
   step_number: number;
   name: string;
+  subject?: string;
+  template?: string;
   ai_prompt: string;
   delay_days: number;
   delay_hours: number;
 }
 
+export interface CampaignProgress {
+  total_leads: number;
+  active_leads: number;
+  completed_leads: number;
+  stopped_leads: number;
+  replied_leads: number;
+  avg_step: number;
+}
+
 export interface Campaign {
   id: number;
   name: string;
-  subject: string;
-  template: string;
+  description?: string;
   status: string;
-  total_leads: number;
-  emails_sent: number;
-  emails_opened: number;
-  completion_rate: number;
   created_at: string;
+  steps?: CampaignStep[];
 }
 
 export interface NewLead {

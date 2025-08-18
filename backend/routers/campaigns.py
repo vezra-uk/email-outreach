@@ -1,332 +1,392 @@
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import func
 from typing import List
-from datetime import date, datetime
-import os
+from datetime import datetime, timedelta
 
 from database import get_db
-from models import Campaign, CampaignLead, DailyStats, Lead
-from models.user import User
-from schemas.campaign import CampaignCreate, CampaignProgress, CampaignResponse, CampaignDetail
+from models import Campaign, CampaignStep, LeadCampaign, Lead, User, CampaignEmail
 from dependencies import get_current_active_user
+from schemas.campaign import (
+    CampaignCreate, 
+    CampaignResponse, 
+    CampaignDetail,
+    CampaignStepResponse,
+    LeadCampaignCreate,
+    LeadCampaignResponse,
+    CampaignProgress,
+    CampaignProgressSummary
+)
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
+@router.post("", response_model=CampaignResponse)
+def create_campaign(campaign: CampaignCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Create a new email campaign with steps"""
+    try:
+        # Create the campaign
+        db_campaign = Campaign(
+            name=campaign.name,
+            description=campaign.description,
+            sending_profile_id=campaign.sending_profile_id,
+            status="active"
+        )
+        db.add(db_campaign)
+        db.flush()  # Get the ID without committing
+        
+        # Create the steps
+        for step_data in campaign.steps:
+            db_step = CampaignStep(
+                sequence_id=db_campaign.id,
+                step_number=step_data.step_number,
+                name=step_data.name,
+                subject=step_data.subject,
+                template=step_data.template,
+                ai_prompt=step_data.ai_prompt,
+                delay_days=step_data.delay_days,
+                delay_hours=step_data.delay_hours,
+                is_active=True,
+                include_previous_emails=step_data.include_previous_emails
+            )
+            db.add(db_step)
+        
+        db.commit()
+        db.refresh(db_campaign)
+        return db_campaign
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to create campaign: {str(e)}")
+
 @router.get("", response_model=List[CampaignResponse])
 def get_campaigns(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    campaigns = db.query(Campaign).all()
+    """Get all email campaigns"""
+    campaigns = db.query(Campaign).filter(Campaign.status == "active").all()
     return campaigns
 
-@router.get("/progress", response_model=List[CampaignProgress])
-def get_campaigns_progress(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    query = text("""
-        SELECT 
-            c.id,
-            c.name,
-            c.subject,
-            c.status,
-            c.created_at,
-            COALESCE(COUNT(cl.id), 0) as total_leads,
-            COALESCE(COUNT(CASE WHEN cl.status = 'sent' THEN 1 END), 0) as emails_sent,
-            COALESCE(COUNT(CASE WHEN cl.opens > 0 THEN 1 END), 0) as emails_opened,
-            COALESCE(COUNT(CASE WHEN cl.clicks > 0 THEN 1 END), 0) as emails_clicked,
-            CASE 
-                WHEN COUNT(cl.id) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) * 100.0 / COUNT(cl.id)), 2)
-                ELSE 0 
-            END as completion_rate,
-            CASE 
-                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.opens > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
-                ELSE 0 
-            END as open_rate,
-            CASE 
-                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.clicks > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
-                ELSE 0 
-            END as click_rate,
-            MAX(cl.sent_at) as last_sent_at
-        FROM campaigns c
-        LEFT JOIN campaign_leads cl ON c.id = cl.campaign_id
-        WHERE c.status = 'active'
-        GROUP BY c.id, c.name, c.subject, c.status, c.created_at
-        ORDER BY c.created_at DESC
-    """)
-    
-    result = db.execute(query).fetchall()
-    
-    campaigns = []
-    for row in result:
-        campaigns.append(CampaignProgress(
-            id=row.id,
-            name=row.name,
-            subject=row.subject,
-            status=row.status,
-            total_leads=row.total_leads,
-            emails_sent=row.emails_sent,
-            emails_opened=row.emails_opened,
-            emails_clicked=row.emails_clicked,
-            completion_rate=float(row.completion_rate),
-            open_rate=float(row.open_rate),
-            click_rate=float(row.click_rate),
-            last_sent_at=row.last_sent_at,
-            created_at=row.created_at
-        ))
-    
-    return campaigns
-
-@router.get("/{campaign_id}/detail", response_model=CampaignDetail)
-def get_campaign_detail(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+@router.get("/{campaign_id}", response_model=CampaignDetail)
+def get_campaign(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Get a specific campaign with its steps"""
     campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
     if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+        raise HTTPException(status_code=404, detail="Sequence not found")
     
-    query = text("""
-        SELECT 
-            COALESCE(COUNT(cl.id), 0) as total_leads,
-            COALESCE(COUNT(CASE WHEN cl.status = 'sent' THEN 1 END), 0) as emails_sent,
-            COALESCE(COUNT(CASE WHEN cl.opens > 0 THEN 1 END), 0) as emails_opened,
-            COALESCE(COUNT(CASE WHEN cl.clicks > 0 THEN 1 END), 0) as emails_clicked,
-            CASE 
-                WHEN COUNT(cl.id) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) * 100.0 / COUNT(cl.id)), 2)
-                ELSE 0 
-            END as completion_rate,
-            CASE 
-                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.opens > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
-                ELSE 0 
-            END as open_rate,
-            CASE 
-                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.clicks > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
-                ELSE 0 
-            END as click_rate,
-            MAX(cl.sent_at) as last_sent_at
-        FROM campaign_leads cl
-        WHERE cl.campaign_id = :campaign_id
-    """)
-    
-    stats = db.execute(query, {"campaign_id": campaign_id}).fetchone()
-    
-    leads_query = text("""
-        SELECT 
-            l.id,
-            l.email,
-            l.first_name,
-            l.last_name,
-            l.company,
-            l.title,
-            cl.status as campaign_status,
-            cl.sent_at,
-            cl.opens,
-            cl.clicks
-        FROM campaign_leads cl
-        JOIN leads l ON cl.lead_id = l.id
-        WHERE cl.campaign_id = :campaign_id
-        ORDER BY cl.created_at DESC
-    """)
-    
-    leads_result = db.execute(leads_query, {"campaign_id": campaign_id}).fetchall()
-    
-    leads = []
-    for lead in leads_result:
-        leads.append({
-            "id": lead.id,
-            "email": lead.email,
-            "first_name": lead.first_name,
-            "last_name": lead.last_name,
-            "company": lead.company,
-            "title": lead.title,
-            "status": lead.campaign_status,
-            "sent_at": lead.sent_at,
-            "opens": lead.opens,
-            "clicks": lead.clicks
-        })
+    steps = db.query(CampaignStep).filter(
+        CampaignStep.sequence_id == campaign_id
+    ).order_by(CampaignStep.step_number).all()
     
     return CampaignDetail(
         id=campaign.id,
         name=campaign.name,
-        subject=campaign.subject,
-        template=campaign.template,
-        ai_prompt=campaign.ai_prompt,
+        description=campaign.description,
         status=campaign.status,
-        total_leads=stats.total_leads if stats else 0,
-        emails_sent=stats.emails_sent if stats else 0,
-        emails_opened=stats.emails_opened if stats else 0,
-        emails_clicked=stats.emails_clicked if stats else 0,
-        completion_rate=float(stats.completion_rate) if stats else 0,
-        open_rate=float(stats.open_rate) if stats else 0,
-        click_rate=float(stats.click_rate) if stats else 0,
-        last_sent_at=stats.last_sent_at if stats else None,
         created_at=campaign.created_at,
-        leads=leads
+        steps=[CampaignStepResponse.from_orm(step) for step in steps]
     )
 
-@router.post("", response_model=CampaignResponse)
-def create_campaign(campaign: CampaignCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    db_campaign = Campaign(
-        name=campaign.name,
-        subject="",
-        template="",
-        ai_prompt=campaign.ai_prompt,
-        sending_profile_id=campaign.sending_profile_id,
-        total_leads=len(campaign.lead_ids)
-    )
-    db.add(db_campaign)
-    db.flush()
-    
-    for lead_id in campaign.lead_ids:
-        campaign_lead = CampaignLead(
-            campaign_id=db_campaign.id,
-            lead_id=lead_id,
-            tracking_pixel_id=f"pixel_{db_campaign.id}_{lead_id}"
-        )
-        db.add(campaign_lead)
-    
-    db.commit()
-    db.refresh(db_campaign)
-    return db_campaign
-
-@router.post("/send")
-def trigger_email_send(background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    from services.email_batch import send_email_batch
-    
-    today = date.today()
-    daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
-    if not daily_stats:
-        daily_stats = DailyStats(date=today)
-        db.add(daily_stats)
-        db.commit()
-    
-    daily_limit = int(os.getenv("DAILY_EMAIL_LIMIT", 30))
-    if daily_stats.emails_sent >= daily_limit:
-        raise HTTPException(status_code=400, detail="Daily email limit reached")
-    
-    background_tasks.add_task(send_email_batch)
-    return {"message": "Email sending started", "remaining": daily_limit - daily_stats.emails_sent}
-
-@router.put("/{campaign_id}/complete")
-def mark_campaign_complete(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    """Mark a campaign as completed"""
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    
-    campaign.status = "completed"
-    campaign.updated_at = datetime.utcnow()
-    db.commit()
-    
-    return {"message": "Campaign marked as completed"}
-
-@router.put("/{campaign_id}/archive")
-def archive_campaign(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    """Archive a campaign (removes from main dashboard)"""
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    
-    campaign.status = "archived"
-    campaign.updated_at = datetime.utcnow()
-    db.commit()
-    
-    return {"message": "Campaign archived"}
-
-@router.put("/{campaign_id}/reactivate")
-def reactivate_campaign(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    """Reactivate a completed or archived campaign"""
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    
-    campaign.status = "active"
-    campaign.updated_at = datetime.utcnow()
-    db.commit()
-    
-    return {"message": "Campaign reactivated"}
-
-@router.delete("/{campaign_id}/permanent")
-def permanently_delete_campaign(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    """Permanently delete a campaign and all associated data"""
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+@router.put("/{campaign_id}", response_model=CampaignResponse)
+def update_campaign(campaign_id: int, campaign: CampaignCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Update an existing campaign"""
+    db_campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not db_campaign:
+        raise HTTPException(status_code=404, detail="Sequence not found")
     
     try:
-        # Delete related campaign leads first (due to foreign key constraints)
-        campaign_leads_count = db.query(CampaignLead).filter(CampaignLead.campaign_id == campaign_id).count()
-        db.query(CampaignLead).filter(CampaignLead.campaign_id == campaign_id).delete()
+        # Update campaign details
+        db_campaign.name = campaign.name
+        db_campaign.description = campaign.description
+        db_campaign.sending_profile_id = campaign.sending_profile_id
+        db_campaign.updated_at = datetime.utcnow()
         
-        # Delete the campaign itself
-        db.delete(campaign)
+        # Delete existing steps
+        db.query(CampaignStep).filter(CampaignStep.sequence_id == campaign_id).delete()
+        
+        # Create new steps
+        for step_data in campaign.steps:
+            db_step = CampaignStep(
+                sequence_id=campaign_id,
+                step_number=step_data.step_number,
+                name=step_data.name,
+                subject=step_data.subject,
+                template=step_data.template,
+                ai_prompt=step_data.ai_prompt,
+                delay_days=step_data.delay_days,
+                delay_hours=step_data.delay_hours,
+                is_active=True,
+                include_previous_emails=step_data.include_previous_emails
+            )
+            db.add(db_step)
+        
         db.commit()
-        
-        return {
-            "message": "Campaign permanently deleted successfully",
-            "campaign_name": campaign.name,
-            "campaign_leads_deleted": campaign_leads_count
-        }
+        db.refresh(db_campaign)
+        return db_campaign
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete campaign: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to update campaign: {str(e)}")
 
-@router.get("/archived", response_model=List[CampaignProgress])
-def get_archived_campaigns(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    """Get completed and archived campaigns"""
-    query = text("""
-        SELECT 
-            c.id,
-            c.name,
-            c.subject,
-            c.status,
-            c.created_at,
-            COALESCE(COUNT(cl.id), 0) as total_leads,
-            COALESCE(COUNT(CASE WHEN cl.status = 'sent' THEN 1 END), 0) as emails_sent,
-            COALESCE(COUNT(CASE WHEN cl.opens > 0 THEN 1 END), 0) as emails_opened,
-            COALESCE(COUNT(CASE WHEN cl.clicks > 0 THEN 1 END), 0) as emails_clicked,
-            CASE 
-                WHEN COUNT(cl.id) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) * 100.0 / COUNT(cl.id)), 2)
-                ELSE 0 
-            END as completion_rate,
-            CASE 
-                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.opens > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
-                ELSE 0 
-            END as open_rate,
-            CASE 
-                WHEN COUNT(CASE WHEN cl.status = 'sent' THEN 1 END) > 0 THEN 
-                    ROUND((COUNT(CASE WHEN cl.clicks > 0 THEN 1 END) * 100.0 / COUNT(CASE WHEN cl.status = 'sent' THEN 1 END)), 2)
-                ELSE 0 
-            END as click_rate,
-            MAX(cl.sent_at) as last_sent_at
-        FROM campaigns c
-        LEFT JOIN campaign_leads cl ON c.id = cl.campaign_id
-        WHERE c.status IN ('completed', 'archived')
-        GROUP BY c.id, c.name, c.subject, c.status, c.created_at
-        ORDER BY c.updated_at DESC
-    """)
+@router.delete("/{campaign_id}")
+def delete_campaign(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Delete a campaign (soft delete by setting status to inactive)"""
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Sequence not found")
     
-    result = db.execute(query).fetchall()
+    # Check if campaign has active lead campaigns
+    active_leads = db.query(LeadCampaign).filter(
+        LeadCampaign.sequence_id == campaign_id,
+        LeadCampaign.status == "active"
+    ).count()
     
-    campaigns = []
-    for row in result:
-        campaigns.append(CampaignProgress(
-            id=row.id,
-            name=row.name,
-            subject=row.subject,
-            status=row.status,
-            created_at=row.created_at,
-            total_leads=row.total_leads,
-            emails_sent=row.emails_sent,
-            emails_opened=row.emails_opened,
-            emails_clicked=row.emails_clicked,
-            completion_rate=row.completion_rate,
-            open_rate=row.open_rate,
-            click_rate=row.click_rate,
-            last_sent_at=row.last_sent_at
-        ))
+    if active_leads > 0:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot delete campaign. It has {active_leads} active lead(s) enrolled."
+        )
     
-    return campaigns
+    campaign.status = "inactive"
+    campaign.updated_at = datetime.utcnow()
+    db.commit()
+    
+    return {"message": "Sequence deleted successfully"}
+
+@router.post("/{campaign_id}/leads", response_model=List[LeadCampaignResponse])
+def enroll_leads_in_campaign(
+    campaign_id: int, 
+    enrollment: LeadCampaignCreate, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Enroll leads in a campaign"""
+    # Verify campaign exists
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Sequence not found")
+    
+    # Verify all leads exist
+    leads = db.query(Lead).filter(Lead.id.in_(enrollment.lead_ids)).all()
+    if len(leads) != len(enrollment.lead_ids):
+        raise HTTPException(status_code=400, detail="Some leads not found")
+    
+    created_enrollments = []
+    
+    try:
+        for lead_id in enrollment.lead_ids:
+            # Check if lead is already enrolled in this campaign
+            existing = db.query(LeadCampaign).filter(
+                LeadCampaign.lead_id == lead_id,
+                LeadCampaign.sequence_id == campaign_id,
+                LeadCampaign.status == "active"
+            ).first()
+            
+            if existing:
+                continue  # Skip already enrolled leads
+            
+            # Get first step to calculate next_send_at
+            first_step = db.query(CampaignStep).filter(
+                CampaignStep.sequence_id == campaign_id,
+                CampaignStep.step_number == 1
+            ).first()
+            
+            next_send_at = datetime.utcnow()
+            if first_step:
+                next_send_at += timedelta(days=first_step.delay_days, hours=first_step.delay_hours)
+            
+            lead_campaign = LeadCampaign(
+                lead_id=lead_id,
+                sequence_id=campaign_id,
+                current_step=1,
+                status="active",
+                started_at=datetime.utcnow(),
+                next_send_at=next_send_at
+            )
+            db.add(lead_campaign)
+            created_enrollments.append(lead_campaign)
+        
+        db.commit()
+        
+        # Refresh all created enrollments
+        for enrollment in created_enrollments:
+            db.refresh(enrollment)
+        
+        return created_enrollments
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to enroll leads: {str(e)}")
+
+@router.get("/{campaign_id}/leads", response_model=List[LeadCampaignResponse])
+def get_campaign_leads(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Get all leads enrolled in a campaign"""
+    lead_campaigns = db.query(LeadCampaign).filter(
+        LeadCampaign.sequence_id == campaign_id
+    ).all()
+    return lead_campaigns
+
+@router.get("/all/progress", response_model=List[CampaignProgressSummary])
+def get_campaigns_progress(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Get progress stats for all campaigns (for dashboard)"""
+    try:
+        campaigns = db.query(Campaign).filter(Campaign.status == "active").all()
+        print(f"Found {len(campaigns)} active campaigns")
+        
+        progress_data = []
+        for campaign in campaigns:
+            try:
+                # Get total leads enrolled - ensure it's an integer
+                total_leads = db.query(LeadCampaign).filter(
+                    LeadCampaign.sequence_id == campaign.id
+                ).count() or 0
+                
+                # Get total leads who have received emails - ensure it's an integer
+                emails_sent = db.query(func.distinct(CampaignEmail.lead_sequence_id)).filter(
+                    CampaignEmail.lead_sequence_id.in_(
+                        db.query(LeadCampaign.id).filter(LeadCampaign.sequence_id == campaign.id)
+                    ),
+                    CampaignEmail.status == "sent"
+                ).count() or 0
+                
+                # Get total leads who opened and clicked - ensure they're integers
+                emails_opened = db.query(func.distinct(CampaignEmail.lead_sequence_id)).filter(
+                    CampaignEmail.lead_sequence_id.in_(
+                        db.query(LeadCampaign.id).filter(LeadCampaign.sequence_id == campaign.id)
+                    ),
+                    CampaignEmail.opens > 0
+                ).count() or 0
+                
+                emails_clicked = db.query(func.distinct(CampaignEmail.lead_sequence_id)).filter(
+                    CampaignEmail.lead_sequence_id.in_(
+                        db.query(LeadCampaign.id).filter(LeadCampaign.sequence_id == campaign.id)
+                    ),
+                    CampaignEmail.clicks > 0
+                ).count() or 0
+                
+                # Calculate rates
+                completion_rate = (emails_sent / total_leads * 100) if total_leads > 0 else 0
+                open_rate = (emails_opened / emails_sent * 100) if emails_sent > 0 else 0
+                click_rate = (emails_clicked / emails_sent * 100) if emails_sent > 0 else 0
+                
+                # Get last sent at
+                last_sent_email = db.query(CampaignEmail).filter(
+                    CampaignEmail.lead_sequence_id.in_(
+                        db.query(LeadCampaign.id).filter(LeadCampaign.sequence_id == campaign.id)
+                    ),
+                    CampaignEmail.status == "sent"
+                ).order_by(CampaignEmail.sent_at.desc()).first()
+                
+                last_sent_at = last_sent_email.sent_at if last_sent_email else None
+                
+                # Get first step subject as the campaign "subject"
+                first_step = db.query(CampaignStep).filter(
+                    CampaignStep.sequence_id == campaign.id,
+                    CampaignStep.step_number == 1
+                ).first()
+                subject = first_step.subject if first_step and first_step.subject else "No subject"
+                
+                # Ensure all fields have safe values and correct types
+                safe_name = campaign.name or "Unnamed Campaign"
+                safe_status = campaign.status or "unknown"
+                safe_id = int(campaign.id) if campaign.id is not None else 0
+                safe_total_leads = int(total_leads) if total_leads is not None else 0
+                safe_emails_sent = int(emails_sent) if emails_sent is not None else 0
+                safe_emails_opened = int(emails_opened) if emails_opened is not None else 0
+                safe_emails_clicked = int(emails_clicked) if emails_clicked is not None else 0
+                
+                # Also ensure created_at is valid
+                safe_created_at = campaign.created_at if campaign.created_at is not None else datetime.utcnow()
+                
+                print(f"Campaign {safe_id}: leads={safe_total_leads}, sent={safe_emails_sent}, opened={safe_emails_opened}")
+                
+                progress_data.append(CampaignProgressSummary(
+                    id=safe_id,
+                    name=safe_name,
+                    subject=subject,
+                    status=safe_status,
+                    total_leads=safe_total_leads,
+                    emails_sent=safe_emails_sent,
+                    emails_opened=safe_emails_opened,
+                    emails_clicked=safe_emails_clicked,
+                    completion_rate=float(completion_rate),
+                    open_rate=float(open_rate),
+                    click_rate=float(click_rate),
+                    last_sent_at=last_sent_at,
+                    created_at=safe_created_at
+                ))
+            except Exception as e:
+                print(f"Error processing campaign {campaign.id}: {e}")
+                continue
+        
+        return progress_data
+    
+    except Exception as e:
+        print(f"Error in get_campaigns_progress: {e}")
+        return []
+
+@router.get("/{campaign_id}/progress", response_model=CampaignProgress)
+def get_campaign_progress(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Get progress stats for a specific campaign"""
+    # Verify campaign exists
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Sequence not found")
+    
+    # Get all lead campaigns for this campaign
+    lead_campaigns = db.query(LeadCampaign).filter(
+        LeadCampaign.sequence_id == campaign_id
+    ).all()
+    
+    total_leads = len(lead_campaigns)
+    active_leads = sum(1 for ls in lead_campaigns if ls.status == "active")
+    completed_leads = sum(1 for ls in lead_campaigns if ls.status == "completed")
+    stopped_leads = sum(1 for ls in lead_campaigns if ls.status == "stopped")
+    replied_leads = sum(1 for ls in lead_campaigns if ls.status == "replied")
+    
+    # Calculate average step
+    avg_step = 0.0
+    if lead_campaigns:
+        total_steps = sum(ls.current_step for ls in lead_campaigns)
+        avg_step = total_steps / len(lead_campaigns)
+    
+    return CampaignProgress(
+        total_leads=total_leads,
+        active_leads=active_leads,
+        completed_leads=completed_leads,
+        stopped_leads=stopped_leads,
+        replied_leads=replied_leads,
+        avg_step=avg_step
+    )
+
+@router.delete("/{campaign_id}/leads/{lead_id}")
+def remove_lead_from_campaign(campaign_id: int, lead_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Remove a lead from a campaign"""
+    lead_campaign = db.query(LeadCampaign).filter(
+        LeadCampaign.sequence_id == campaign_id,
+        LeadCampaign.lead_id == lead_id,
+        LeadCampaign.status == "active"
+    ).first()
+    
+    if not lead_campaign:
+        raise HTTPException(status_code=404, detail="Lead campaign enrollment not found")
+    
+    lead_campaign.status = "stopped"
+    lead_campaign.stop_reason = "manually_removed"
+    lead_campaign.updated_at = datetime.utcnow()
+    db.commit()
+    
+    return {"message": "Lead removed from campaign"}
+
+@router.post("/send")
+def trigger_campaign_emails(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Trigger sending of all due campaign emails"""
+    from services.email_batch import send_campaign_batch
+    
+    try:
+        result = send_campaign_batch()
+        return {
+            "message": "Sequence emails processed successfully",
+            "emails_sent": result.get("emails_sent", 0),
+            "campaigns_processed": result.get("campaigns_processed", 0),
+            "errors": result.get("errors", [])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send campaign emails: {str(e)}")

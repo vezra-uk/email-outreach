@@ -1,9 +1,8 @@
 from .lead import LeadCreate, LeadUpdate, LeadResponse
-from .campaign import CampaignCreate, CampaignProgress, CampaignResponse, CampaignDetail
-from .sequence import (
-    SequenceStepCreate, SequenceStepResponse, 
-    EmailSequenceCreate, EmailSequenceResponse, EmailSequenceDetail,
-    LeadSequenceCreate, LeadSequenceResponse
+from .campaign import (
+    CampaignStepCreate, CampaignStepResponse, 
+    CampaignCreate, CampaignResponse, CampaignDetail,
+    LeadCampaignCreate, LeadCampaignResponse, CampaignProgressSummary
 )
 from .sending_profile import SendingProfileCreate, SendingProfileUpdate, SendingProfileResponse
 from .groups import LeadGroupCreate, LeadGroupUpdate, LeadGroupResponse, LeadGroupDetail, GroupMembershipUpdate
@@ -19,10 +18,9 @@ from .auth import (
 
 __all__ = [
     "LeadCreate", "LeadUpdate", "LeadResponse",
-    "CampaignCreate", "CampaignProgress", "CampaignResponse", "CampaignDetail",
-    "SequenceStepCreate", "SequenceStepResponse", 
-    "EmailSequenceCreate", "EmailSequenceResponse", "EmailSequenceDetail",
-    "LeadSequenceCreate", "LeadSequenceResponse",
+    "CampaignStepCreate", "CampaignStepResponse", 
+    "CampaignCreate", "CampaignResponse", "CampaignDetail",
+    "LeadCampaignCreate", "LeadCampaignResponse", "CampaignProgressSummary",
     "SendingProfileCreate", "SendingProfileUpdate", "SendingProfileResponse",
     "LeadGroupCreate", "LeadGroupUpdate", "LeadGroupResponse", "LeadGroupDetail", "GroupMembershipUpdate",
     "LinkClickResponse", "ClickAnalytics",

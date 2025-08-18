@@ -5,7 +5,8 @@ import os
 from datetime import date
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from main import DailyStats, CampaignLead, Campaign, Lead, LeadSequence, SendingProfile, send_sequence_batch
+from main import DailyStats, Campaign, Lead, LeadCampaign, SendingProfile
+from services.email_batch import send_sequence_batch
 from email_service import EmailService
 
 class EmailScheduler:
@@ -34,49 +35,8 @@ class EmailScheduler:
             
             remaining = self.daily_limit - daily_stats.emails_sent
             
-            # Get pending campaign leads
-            pending = db.query(CampaignLead).join(Campaign).join(Lead).filter(
-                CampaignLead.status == "pending",
-                Campaign.status == "active",
-                Lead.status == "active"
-            ).limit(remaining).all()
-            
-            print(f"Found {len(pending)} pending emails to send")
-            
-            sent_count = 0
-            for campaign_lead in pending:
-                try:
-                    campaign = db.query(Campaign).filter(Campaign.id == campaign_lead.campaign_id).first()
-                    lead = db.query(Lead).filter(Lead.id == campaign_lead.lead_id).first()
-                    
-                    # Get sending profile if specified
-                    sending_profile = None
-                    if campaign.sending_profile_id:
-                        sending_profile = db.query(SendingProfile).filter(SendingProfile.id == campaign.sending_profile_id).first()
-                    
-                    success = self.email_service.send_personalized_email(
-                        lead=lead,
-                        campaign=campaign,
-                        tracking_id=campaign_lead.tracking_pixel_id,
-                        sending_profile=sending_profile
-                    )
-                    
-                    if success:
-                        campaign_lead.status = "sent"
-                        campaign_lead.sent_at = datetime.utcnow()
-                        sent_count += 1
-                    else:
-                        campaign_lead.status = "failed"
-                        
-                except Exception as e:
-                    print(f"Failed to send email to {lead.email}: {e}")
-                    campaign_lead.status = "failed"
-            
-            # Update daily stats
-            daily_stats.emails_sent += sent_count
-            db.commit()
-            
-            print(f"Successfully sent {sent_count} emails")
+            # Note: Campaign functionality removed - all emails now sent via sequences
+            print("All email sending now handled by sequence batch processing")
             
         finally:
             db.close()

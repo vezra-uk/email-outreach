@@ -252,6 +252,106 @@ End with this signature:
             print(f"Failed to send email to {lead.email}: {e}")
             return False
     
+    def send_sequence_email_with_context(self, lead, step, tracking_id, sending_profile=None, previous_emails=None):
+        """Send sequence step email via Gmail API with context from previous emails"""
+        if not self.gmail_service:
+            print("Gmail service not available")
+            return None, None
+        
+        try:
+            # Generate personalized content and subject for sequence step with context
+            if previous_emails and step.include_previous_emails:
+                email_data = self.generate_sequence_email_with_context(
+                    lead, step, sending_profile, previous_emails
+                )
+            else:
+                email_data = self.generate_personalized_email_and_subject(
+                    lead, step.ai_prompt or f"Write a professional follow-up email. This is step {step.step_number} in our sequence.", sending_profile
+                )
+            
+            email_body = email_data['content']
+            email_subject = email_data['subject']
+            
+            # Modern multi-signal tracking
+            domain = os.getenv("DOMAIN", "localhost:8000")
+            
+            from modern_tracking_service import modern_tracker
+            tracking_elements = modern_tracker.generate_multi_signal_tracking(tracking_id, domain)
+            
+            # Replace any links with tracked versions
+            import re
+            def replace_links(match):
+                original_url = match.group(1)
+                tracked_url = f"https://{domain}/api/track/click/{tracking_id}?url={original_url}"
+                return f'href="{tracked_url}"'
+            
+            # First, convert plain URLs to clickable links, then track all links
+            # Convert plain URLs to anchor tags (excluding already linked URLs)
+            url_pattern = r'(?<!href=["\'\'`])(?<!src=["\'\'`])(https?://[^\s<>"]+)'
+            email_body = re.sub(url_pattern, r'<a href="\1">\1</a>', email_body)
+            
+            # Track all links in the email (both existing and newly created)
+            email_body_with_tracking = re.sub(r'href="([^"]+)"', replace_links, email_body)
+            
+            # Add multi-signal tracking elements
+            email_body_with_tracking += f'''
+            <!-- Multi-Signal Open Tracking -->
+            {tracking_elements['primary']}
+            {tracking_elements['secondary']}
+            {tracking_elements['content']}
+            
+            <!-- View in browser link with tracking -->
+            <div style="text-align:center;margin:20px 0;padding:10px;border-top:1px solid #eee;">
+                <p style="font-size:11px;color:#666;margin:0;">
+                    <a href="https://{domain}/api/track/view/{tracking_id}" style="color:#666;text-decoration:none;">
+                        View this email in your browser
+                    </a>
+                </p>
+                {tracking_elements['interactive']}
+            </div>
+            
+            {tracking_elements['javascript']}
+            '''
+            
+            # Create email message
+            message = MIMEMultipart('alternative')
+            message['to'] = lead.email
+            message['subject'] = email_subject
+            
+            # Set From header using sending profile or default
+            if sending_profile:
+                from_name = sending_profile.sender_name
+                from_email = sending_profile.sender_email
+                message['from'] = f"{from_name} <{from_email}>"
+            else:
+                # Use default sender from environment
+                default_name = os.getenv('SENDER_NAME', 'Alex Johnson')
+                default_email = os.getenv('SENDER_EMAIL', 'alex@growthsolutions.com')
+                message['from'] = f"{default_name} <{default_email}>"
+            
+            # Add HTML part
+            html_part = MIMEText(email_body_with_tracking, 'html')
+            message.attach(html_part)
+            
+            # Encode message
+            raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+            
+            # Send email
+            result = self.gmail_service.users().messages().send(
+                userId='me',
+                body={'raw': raw_message}
+            ).execute()
+            
+            print(f"Sequence email with context sent successfully to {lead.email}. Message ID: {result['id']}")
+            return True, (email_subject, email_body)
+            
+        except HttpError as error:
+            print(f"Gmail API error sending sequence email to {lead.email}: {error}")
+            return False, None
+        except Exception as e:
+            print(f"Failed to send sequence email to {lead.email}: {e}")
+            return False, None
+                
     def send_sequence_email(self, lead, step, tracking_id, sending_profile=None):
         """Send sequence step email via Gmail API"""
         if not self.gmail_service:

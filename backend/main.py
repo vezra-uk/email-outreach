@@ -37,9 +37,8 @@ def health_check():
 # Import and include routers
 from routers.leads import router as leads_router
 from routers.csv_upload import router as csv_router
-from routers.campaigns import router as campaigns_router
 from routers.dashboard import router as dashboard_router
-from routers.sequences import router as sequences_router
+from routers.campaigns import router as campaigns_router
 from routers.groups import router as groups_router
 from routers.sending_profiles import router as sending_profiles_router
 from routers.auth import router as auth_router
@@ -47,9 +46,8 @@ from routers.auth import router as auth_router
 api_router.include_router(auth_router)
 api_router.include_router(leads_router)
 api_router.include_router(csv_router)
-api_router.include_router(campaigns_router)
 api_router.include_router(dashboard_router)
-api_router.include_router(sequences_router)
+api_router.include_router(campaigns_router)
 api_router.include_router(groups_router)
 api_router.include_router(sending_profiles_router)
 
@@ -120,20 +118,14 @@ def track_signal(
     print(f"Tracking signal for ID: {tracking_id}, type: {signal_type}")
     
     send_time = None
-    campaign_lead = db.query(CampaignLead).filter(
-        CampaignLead.tracking_pixel_id == tracking_id
+    campaign_email = db.query(CampaignEmail).filter(
+        CampaignEmail.tracking_pixel_id == tracking_id
     ).first()
     
-    sequence_email = db.query(SequenceEmail).filter(
-        SequenceEmail.tracking_pixel_id == tracking_id
-    ).first()
+    print(f"Found campaign_email: {campaign_email is not None}")
     
-    print(f"Found campaign_lead: {campaign_lead is not None}, sequence_email: {sequence_email is not None}")
-    
-    if campaign_lead and campaign_lead.sent_at:
-        send_time = campaign_lead.sent_at
-    elif sequence_email and sequence_email.sent_at:
-        send_time = sequence_email.sent_at
+    if campaign_email and campaign_email.sent_at:
+        send_time = campaign_email.sent_at
     else:
         send_time = datetime.utcnow()
     
@@ -145,20 +137,9 @@ def track_signal(
     print(f"Open analysis confidence: {analysis['confidence_score']}")
     
     if analysis['confidence_score'] > 0.3:
-        if campaign_lead:
-            campaign_lead.opens = max(campaign_lead.opens, 1)
-            print(f"Updated campaign_lead opens to: {campaign_lead.opens}")
-            today = date.today()
-            daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
-            if not daily_stats:
-                daily_stats = DailyStats(date=today, emails_opened=1)
-                db.add(daily_stats)
-            else:
-                daily_stats.emails_opened += 1
-        
-        elif sequence_email:
-            sequence_email.opens = max(sequence_email.opens, 1)
-            print(f"Updated sequence_email opens to: {sequence_email.opens}")
+        if campaign_email:
+            campaign_email.opens = max(campaign_email.opens, 1)
+            print(f"Updated campaign_email opens to: {campaign_email.opens}")
             today = date.today()
             daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
             if not daily_stats:
@@ -203,37 +184,19 @@ def track_link_click(tracking_id: str, url: str, request: Request, db: Session =
     referer = request.headers.get("referer", "")
     original_url = unquote(url)
     
-    campaign_lead = db.query(CampaignLead).filter(
-        CampaignLead.tracking_pixel_id == tracking_id
-    ).first()
-    
-    sequence_email = db.query(SequenceEmail).filter(
-        SequenceEmail.tracking_pixel_id == tracking_id
+    campaign_email = db.query(CampaignEmail).filter(
+        CampaignEmail.tracking_pixel_id == tracking_id
     ).first()
     
     send_time = datetime.utcnow()
     
-    if campaign_lead:
-        send_time = campaign_lead.sent_at if campaign_lead.sent_at else send_time
-        campaign_lead.clicks += 1
+    if campaign_email:
+        send_time = campaign_email.sent_at if campaign_email.sent_at else send_time
+        campaign_email.clicks += 1
         
         link_click = LinkClick(
             tracking_id=tracking_id,
-            campaign_lead_id=campaign_lead.id,
-            original_url=original_url,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            referer=referer
-        )
-        db.add(link_click)
-        
-    elif sequence_email:
-        send_time = sequence_email.sent_at if sequence_email.sent_at else send_time
-        sequence_email.clicks += 1
-        
-        link_click = LinkClick(
-            tracking_id=tracking_id,
-            sequence_email_id=sequence_email.id,
+            campaign_email_id=campaign_email.id,
             original_url=original_url,
             ip_address=ip_address,
             user_agent=user_agent,

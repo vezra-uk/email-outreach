@@ -46,7 +46,7 @@ def update_sending_profile(profile_id: int, profile_update: SendingProfileUpdate
 
 @router.delete("/{profile_id}")
 def delete_sending_profile(profile_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    from models import Campaign, EmailSequence
+    from models import Campaign, Campaign
     
     db_profile = db.query(SendingProfile).filter(SendingProfile.id == profile_id).first()
     if not db_profile:
@@ -67,13 +67,13 @@ def delete_sending_profile(profile_id: int, db: Session = Depends(get_db), curre
         )
     
     # Check for sequences using this sending profile (any status)
-    sequences_count = db.query(EmailSequence).filter(
-        EmailSequence.sending_profile_id == profile_id
+    sequences_count = db.query(Campaign).filter(
+        Campaign.sending_profile_id == profile_id
     ).count()
     
     if sequences_count > 0:
         # Get sequence details for better error message
-        sequences = db.query(EmailSequence).filter(EmailSequence.sending_profile_id == profile_id).limit(5).all()
+        sequences = db.query(Campaign).filter(Campaign.sending_profile_id == profile_id).limit(5).all()
         sequence_info = [f"{s.name} (status: {s.status})" for s in sequences]
         raise HTTPException(
             status_code=400,
@@ -87,7 +87,7 @@ def delete_sending_profile(profile_id: int, db: Session = Depends(get_db), curre
 @router.post("/{profile_id}/remove-from-archived")
 def remove_from_archived_campaigns_and_sequences(profile_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Remove sending profile from archived campaigns and sequences to allow deletion"""
-    from models import Campaign, EmailSequence
+    from models import Campaign, Campaign
     
     # Update archived campaigns to use NULL sending profile
     archived_campaigns = db.query(Campaign).filter(
@@ -99,9 +99,9 @@ def remove_from_archived_campaigns_and_sequences(profile_id: int, db: Session = 
         campaign.sending_profile_id = None
     
     # Update inactive sequences to use NULL sending profile  
-    inactive_sequences = db.query(EmailSequence).filter(
-        EmailSequence.sending_profile_id == profile_id,
-        EmailSequence.status.in_(["inactive", "completed"])
+    inactive_sequences = db.query(Campaign).filter(
+        Campaign.sending_profile_id == profile_id,
+        Campaign.status.in_(["inactive", "completed"])
     ).all()
     
     for sequence in inactive_sequences:

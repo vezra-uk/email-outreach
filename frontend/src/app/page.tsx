@@ -50,7 +50,7 @@ function Dashboard() {
     try {
       const [stats, campaigns] = await Promise.all([
         apiClient.getJson<DashboardStats>('/api/dashboard'),
-        apiClient.getJson<Campaign[]>('/api/campaigns/progress')
+        apiClient.getJson<Campaign[]>('/api/campaigns/all/progress')
       ])
       setStats(stats)
       setCampaigns(campaigns)
@@ -62,7 +62,7 @@ function Dashboard() {
   const triggerEmailSend = async () => {
     setLoading(true)
     try {
-      const result = await apiClient.postJson<{message: string}>('/api/send-emails')
+      const result = await apiClient.postJson<{message: string}>('/api/campaigns/send')
       alert(`Email sending started! ${result.message}`)
       fetchDashboardData()
     } catch {

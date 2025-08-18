@@ -54,16 +54,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const login = async (email: string, password: string) => {
+    console.log('Login function called with:', { email, password: password ? '***' : 'EMPTY' });
     try {
       // Use apiClient for consistent URL handling and redirect prevention
       const response = await apiClient.post('/api/auth/login', { email, password });
+      console.log('Login response status:', response.status);
 
       if (!response.ok) {
         const errorData = await response.json();
+        console.error('Login failed:', errorData);
         throw new Error(errorData.detail || 'Login failed');
       }
 
       const { access_token } = await response.json();
+      console.log('Login successful, token received');
       
       // Store token
       localStorage.setItem('auth_token', access_token);
@@ -72,6 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Fetch user data
       await fetchUser(access_token);
     } catch (error) {
+      console.error('Login function error:', error);
       throw error;
     }
   };
@@ -129,8 +134,8 @@ export function withAuth<T extends object>(Component: React.ComponentType<T>) {
 
 // Simple login page component
 function LoginPage() {
-  const [email, setEmail] = useState('admin@example.com');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
@@ -140,9 +145,12 @@ function LoginPage() {
     setLoading(true);
     setError('');
 
+    console.log('Login attempt:', { email, password: password.length > 0 ? '***' : 'EMPTY' });
+
     try {
       await login(email, password);
     } catch (error: any) {
+      console.error('Login error:', error);
       setError(error.message || 'Login failed');
     } finally {
       setLoading(false);

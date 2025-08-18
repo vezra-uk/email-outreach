@@ -31,7 +31,6 @@ export default function Header() {
 
   // Secondary navigation items (in dropdown)
   const secondaryNavigation = [
-    { name: 'Sequences', href: '/sequences', icon: Zap },
     { name: 'Leads', href: '/leads', icon: Users },
     { name: 'Email Opens', href: '/opens', icon: Eye },
     { name: 'Groups', href: '/groups', icon: Folder },

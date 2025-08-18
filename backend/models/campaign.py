@@ -1,38 +1,74 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Numeric, Date
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Boolean, Date, Numeric
 from datetime import datetime
 from .base import Base
 
 class Campaign(Base):
-    __tablename__ = "campaigns"
+    __tablename__ = "email_sequences"
     
     id = Column(Integer, primary_key=True, index=True)
+    name = Column(String)
+    description = Column(Text)
+    sending_profile_id = Column(Integer, ForeignKey("sending_profiles.id"))
+    status = Column(String, default="active")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+class CampaignStep(Base):
+    __tablename__ = "sequence_steps"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    sequence_id = Column(Integer, ForeignKey("email_sequences.id"))
+    step_number = Column(Integer)
     name = Column(String)
     subject = Column(String)
     template = Column(Text)
     ai_prompt = Column(Text)
-    sending_profile_id = Column(Integer, ForeignKey("sending_profiles.id"))
+    delay_days = Column(Integer, default=0)
+    delay_hours = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    include_previous_emails = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class LeadCampaign(Base):
+    __tablename__ = "lead_sequences"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    lead_id = Column(Integer, ForeignKey("leads.id"))
+    sequence_id = Column(Integer, ForeignKey("email_sequences.id"))
+    current_step = Column(Integer, default=1)
     status = Column(String, default="active")
-    daily_limit = Column(Integer, default=30)
-    total_leads = Column(Integer, default=0)
-    emails_sent = Column(Integer, default=0)
-    emails_opened = Column(Integer, default=0)
-    emails_clicked = Column(Integer, default=0)
-    completion_rate = Column(Numeric(5,2), default=0.00)
+    started_at = Column(DateTime, default=datetime.utcnow)
     last_sent_at = Column(DateTime)
+    next_send_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    stop_reason = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
-class CampaignLead(Base):
-    __tablename__ = "campaign_leads"
+class CampaignEmail(Base):
+    __tablename__ = "sequence_emails"
     
     id = Column(Integer, primary_key=True, index=True)
-    campaign_id = Column(Integer, ForeignKey("campaigns.id"))
-    lead_id = Column(Integer, ForeignKey("leads.id"))
+    lead_sequence_id = Column(Integer, ForeignKey("lead_sequences.id"))
+    step_id = Column(Integer, ForeignKey("sequence_steps.id"))
     status = Column(String, default="pending")
+    subject = Column(String)
+    content = Column(Text)
     sent_at = Column(DateTime)
     opens = Column(Integer, default=0)
     clicks = Column(Integer, default=0)
     tracking_pixel_id = Column(String, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class EmailReply(Base):
+    __tablename__ = "email_replies"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    lead_id = Column(Integer, ForeignKey("leads.id"))
+    sequence_id = Column(Integer, ForeignKey("email_sequences.id"))
+    reply_email_id = Column(String)
+    reply_content = Column(Text)
+    reply_date = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class DailyStats(Base):

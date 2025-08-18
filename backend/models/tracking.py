@@ -7,7 +7,7 @@ class LinkClick(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     tracking_id = Column(String, index=True, nullable=False)
-    campaign_lead_id = Column(Integer, ForeignKey("campaign_leads.id"), nullable=True)
+    lead_sequence_id = Column(Integer, ForeignKey("lead_sequences.id"), nullable=True)
     sequence_email_id = Column(Integer, ForeignKey("sequence_emails.id"), nullable=True)
     original_url = Column(Text, nullable=False)
     ip_address = Column(String(45))
@@ -38,7 +38,7 @@ class EmailOpenAnalysis(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     tracking_id = Column(String, unique=True, nullable=False)
-    campaign_lead_id = Column(Integer, ForeignKey("campaign_leads.id"), nullable=True)
+    lead_sequence_id = Column(Integer, ForeignKey("lead_sequences.id"), nullable=True)
     sequence_email_id = Column(Integer, ForeignKey("sequence_emails.id"), nullable=True)
     total_signals = Column(Integer, default=0)
     confidence_score = Column(Numeric(3, 2), default=0.0)

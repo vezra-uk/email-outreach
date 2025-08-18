@@ -19,7 +19,7 @@ interface SequenceStep {
   is_active: string;
 }
 
-interface EmailSequence {
+interface Campaign {
   id: number;
   name: string;
   description?: string;
@@ -28,7 +28,7 @@ interface EmailSequence {
   steps: SequenceStep[];
 }
 
-interface SequenceProgress {
+interface CampaignProgress {
   total_leads: number;
   active_leads: number;
   completed_leads: number;
@@ -42,8 +42,8 @@ function SequenceDetailPage() {
   const router = useRouter();
   const sequenceId = params.id as string;
   
-  const [sequence, setSequence] = useState<EmailSequence | null>(null);
-  const [progress, setProgress] = useState<SequenceProgress | null>(null);
+  const [sequence, setSequence] = useState<Campaign | null>(null);
+  const [progress, setProgress] = useState<CampaignProgress | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selectedLeads, setSelectedLeads] = useState<number[]>([]);
   const [showAddLeads, setShowAddLeads] = useState(false);
@@ -52,13 +52,13 @@ function SequenceDetailPage() {
   useEffect(() => {
     if (sequenceId) {
       fetchSequenceDetail();
-      fetchSequenceProgress();
+      fetchCampaignProgress();
     }
   }, [sequenceId]);
 
   const fetchSequenceDetail = async () => {
     try {
-      const data = await apiClient.getJson<EmailSequence>(`/api/sequences/${sequenceId}`);
+      const data = await apiClient.getJson<Campaign>(`/api/campaigns/${sequenceId}`);
       setSequence(data);
     } catch (error) {
       console.error('Error fetching sequence:', error);
@@ -67,9 +67,9 @@ function SequenceDetailPage() {
     }
   };
 
-  const fetchSequenceProgress = async () => {
+  const fetchCampaignProgress = async () => {
     try {
-      const data = await apiClient.getJson<SequenceProgress>(`/api/sequences/${sequenceId}/progress`);
+      const data = await apiClient.getJson<CampaignProgress>(`/api/campaigns/${sequenceId}/progress`);
       setProgress(data);
     } catch (error) {
       console.error('Error fetching progress:', error);
@@ -89,7 +89,7 @@ function SequenceDetailPage() {
     if (selectedLeads.length === 0) return;
 
     try {
-      await apiClient.post(`/api/sequences/${sequenceId}/leads`, {
+      await apiClient.post(`/api/campaigns/${sequenceId}/leads`, {
         lead_ids: selectedLeads,
         sequence_id: parseInt(sequenceId)
       });
@@ -97,7 +97,7 @@ function SequenceDetailPage() {
       alert(`Added ${selectedLeads.length} leads to sequence!`);
       setShowAddLeads(false);
       setSelectedLeads([]);
-      fetchSequenceProgress(); // Refresh progress
+      fetchCampaignProgress(); // Refresh progress
     } catch (error) {
       console.error('Error adding leads:', error);
       alert('Failed to add leads to sequence');
@@ -109,9 +109,9 @@ function SequenceDetailPage() {
     
     if (confirm(`Are you sure you want to delete the sequence "${sequence.name}"? This cannot be undone.`)) {
       try {
-        await apiClient.delete(`/api/sequences/${sequenceId}`);
+        await apiClient.delete(`/api/campaigns/${sequenceId}`);
         alert('Sequence deleted successfully!');
-        router.push('/sequences');
+        router.push('/campaigns');
       } catch (error) {
         console.error('Error deleting sequence:', error);
         const errorMessage = error instanceof Error ? error.message : 'Failed to delete sequence';
@@ -168,7 +168,7 @@ function SequenceDetailPage() {
           >
             Delete Sequence
           </Button>
-          <Button onClick={() => router.push('/sequences')}>
+          <Button onClick={() => router.push('/campaigns')}>
             Back to Sequences
           </Button>
         </div>

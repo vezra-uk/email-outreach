@@ -38,6 +38,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+
   frontend:
     build:
       context: ./frontend
