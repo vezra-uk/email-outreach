@@ -1,0 +1,24 @@
+Return-Path: <sender@example.com>
+Received: from mail.example.com (mail.example.com [192.168.1.1])
+	by recipient.com (Postfix) with ESMTP id 12345
+	for <recipient@example.com>; Mon, 19 Aug 2024 18:30:00 +0000 (UTC)
+From: Alex Johnson <sender@example.com>
+To: John Smith <recipient@example.com>
+Subject: Quick question about your services
+Date: Mon, 19 Aug 2024 18:30:00 +0000
+Message-ID: <20240819183000.12345@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+
+Hi John,
+
+I noticed your company's website and was impressed by your approach to customer service.
+
+I had a quick question about your consulting services. Would you have 5 minutes this week for a brief call?
+
+Best regards,
+Alex Johnson
+Business Development Manager
+Growth Solutions Inc.
+alex@business.com

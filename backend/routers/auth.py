@@ -1,9 +1,10 @@
 # backend/routers/auth.py
-from datetime import timedelta
+from datetime import timedelta, datetime
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
+import logging
 
 from database import get_db
 from models import User, APIKey
@@ -13,6 +14,9 @@ from schemas.auth import (
     APIKeyCreate, APIKey as APIKeySchema, APIKeyPublic
 )
 from services.auth import AuthService, get_current_active_user, get_current_superuser
+from logger_config import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -22,8 +26,17 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 @router.post("/login", response_model=Token)
 def login(login_data: LoginRequest, db: Session = Depends(get_db)):
     """Login and get access token."""
+    logger.info("Login attempt", extra={
+        "email": login_data.email,
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    
     user = AuthService.authenticate_user(db, login_data.email, login_data.password)
     if not user:
+        logger.warning("Failed login attempt", extra={
+            "email": login_data.email,
+            "reason": "invalid_credentials"
+        })
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -31,6 +44,10 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         )
     
     if not user.is_active:
+        logger.warning("Login attempt by inactive user", extra={
+            "user_id": user.id,
+            "email": user.email
+        })
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user"
@@ -41,6 +58,12 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         data={"sub": user.email}, 
         expires_delta=access_token_expires
     )
+    
+    logger.info("Successful login", extra={
+        "user_id": user.id,
+        "email": user.email,
+        "token_expires_in": int(access_token_expires.total_seconds())
+    })
     
     return {
         "access_token": access_token,

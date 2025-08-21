@@ -41,7 +41,7 @@ class ModernOpenTracker:
         """Generate multiple tracking elements for comprehensive detection"""
         
         # Primary pixel - immediate load
-        primary_pixel = f'''<img src="https://{domain}/api/track/signal/{tracking_id}/primary" width="1" height="1" style="opacity:0;max-height:0;overflow:hidden;" alt="">'''
+        primary_pixel = f'''<img src="https://{domain}/api/track/signal/{tracking_id}/primary" width="1" height="1" style="opacity:0;max-height:0;overflow:hidden;font-size:1px;" alt="">'''
         
         # Secondary pixel - delayed load via CSS
         secondary_pixel = f'''
@@ -55,7 +55,7 @@ class ModernOpenTracker:
         '''
         
         # Tertiary pixel - content-based loading
-        content_pixel = f'''<img src="https://{domain}/api/track/signal/{tracking_id}/content" width="1" height="1" style="display:block;visibility:hidden;position:absolute;top:-1px;" alt="">'''
+        content_pixel = f'''<img src="https://{domain}/api/track/signal/{tracking_id}/content" width="1" height="1" style="display:block;visibility:hidden;position:absolute;top:-1px;font-size:1px;" alt="">'''
         
         # Interactive element tracking
         interactive_link = f'''<a href="https://{domain}/api/track/view/{tracking_id}" style="color:#f8f9fa;font-size:1px;text-decoration:none;display:block;height:1px;overflow:hidden;">.</a>'''
@@ -133,12 +133,14 @@ class ModernOpenTracker:
         
         total_confidence = 0.0
         signal_weights = {
-            'primary': 0.4,
-            'secondary': 0.5,
-            'content': 0.5,
+            'logo': 0.8,         # High confidence - legitimate business logo
+            'css': 0.6,          # Good confidence - CSS background tracking
             'interactive': 0.8,  # High weight for clicks
-            'javascript': 0.7,   # High weight for JS execution
-            'view_browser': 0.9  # Very high weight for browser views
+            'view_browser': 0.9, # Very high weight for browser views
+            'primary': 0.4,      # Legacy pixel (keeping for compatibility)
+            'secondary': 0.5,    # Legacy pixel
+            'content': 0.5,      # Legacy pixel
+            'javascript': 0.7    # Legacy JS tracking
         }
         
         # Time-based analysis

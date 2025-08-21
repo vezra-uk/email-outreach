@@ -52,8 +52,32 @@ services:
       - email-automation
     restart: unless-stopped
 
+  rspamd:
+    image: rspamd/rspamd:latest
+    ports:
+      - "11334:11334"  # Normal worker
+      - "11333:11333"  # Controller (web interface)
+    environment:
+      - RSPAMD_CONFIG=/etc/rspamd/rspamd.conf
+    volumes:
+      - rspamd_data:/var/lib/rspamd
+      - rspamd_logs:/var/log/rspamd
+    networks:
+      - email-automation
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11334/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
 volumes:
   postgres_data:
+    driver: local
+  rspamd_data:
+    driver: local
+  rspamd_logs:
     driver: local
 
 networks:

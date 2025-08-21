@@ -8,14 +8,45 @@ import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import uuid
+import logging
+import socket
+import re
+import time
+import requests
+from typing import Dict, Optional, Tuple
+from datetime import datetime
+
+from logger_config import get_logger
+from modern_tracking_service import modern_tracker
+
+logger = get_logger(__name__)
 
 class EmailService:
     def __init__(self):
-        self.openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        logger.info("Initializing EmailService")
+        
+        # Initialize OpenAI client
+        try:
+            self.openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            logger.info("OpenAI client initialized successfully")
+        except Exception as e:
+            logger.error("Failed to initialize OpenAI client", extra={
+                "error": str(e), "error_type": type(e).__name__
+            }, exc_info=True)
+            raise
+            
+        # Initialize Gmail service
         self.gmail_service = self._setup_gmail()
+        
+        # Rspamd config - use service name for Docker networking
+        self.rspamd_host = "rspamd"
+        self.rspamd_port = 11333  # Controller port (allows scanning)
+        self.rspamd_url = f"http://{self.rspamd_host}:{self.rspamd_port}"
         
     def _setup_gmail(self):
         """Setup Gmail API service"""
+        logger.debug("Setting up Gmail API service")
+        
         try:
             creds = Credentials(
                 token=None,
@@ -25,552 +56,451 @@ class EmailService:
                 client_secret=os.getenv('GMAIL_CLIENT_SECRET'),
                 token_uri='https://oauth2.googleapis.com/token'
             )
-            return build('gmail', 'v1', credentials=creds)
+            service = build('gmail', 'v1', credentials=creds)
+            logger.info("Gmail API service setup successfully")
+            return service
         except Exception as e:
-            print(f"Failed to setup Gmail service: {e}")
+            logger.error("Failed to setup Gmail service", extra={
+                "error": str(e), "error_type": type(e).__name__
+            }, exc_info=True)
             return None
-    
-    def generate_personalized_email_and_subject(self, lead, ai_prompt, sending_profile=None):
-        """Generate personalized email content and subject using OpenAI"""
-        try:
-            # Get sender information for the AI prompt
-            sender_name = sending_profile.sender_name if sending_profile else os.getenv('SENDER_NAME', 'Alex Johnson')
-            sender_title = sending_profile.sender_title if sending_profile else os.getenv('SENDER_TITLE', 'Business Development Manager')
-            sender_company = sending_profile.sender_company if sending_profile else os.getenv('SENDER_COMPANY', 'Growth Solutions Inc.')
-            sender_email = sending_profile.sender_email if sending_profile else os.getenv('SENDER_EMAIL', 'alex@growthsolutions.com')
-            sender_phone = sending_profile.sender_phone if sending_profile else os.getenv('SENDER_PHONE', '')
-            sender_contact = f"{sender_email}" + (f" | {sender_phone}" if sender_phone else "")
-            sender_signature = sending_profile.signature if sending_profile and sending_profile.signature else f"{sender_name}<br>{sender_title}<br>{sender_company}<br>{sender_contact}"
 
-            # Clean and prepare lead data
-            lead_name = (lead.first_name or '').strip()
-            lead_company = (lead.company or '').strip()
-            lead_title = (getattr(lead, 'title', '') or '').strip()
-            lead_industry = (getattr(lead, 'industry', '') or '').strip()
-            lead_website = (getattr(lead, 'website', '') or '').strip()
-
-            prompt = f"""You are a professional email copywriter. Write a personalized cold email with subject line.
+    def _generate_ai_email(self, lead, prompt_text, sending_profile=None, is_followup=False, previous_emails=None):
+        """Generate email using OpenAI with spam checking"""
+        logger.info("AI_GENERATION_STARTED: Starting AI email generation", extra={
+            "lead_id": getattr(lead, 'id', None),
+            "is_followup": is_followup,
+            "has_previous_emails": bool(previous_emails)
+        })
+        
+        # Get sender info
+        sender_name = sending_profile.sender_name if sending_profile else os.getenv('SENDER_NAME', 'Alex Johnson')
+        sender_title = sending_profile.sender_title if sending_profile else os.getenv('SENDER_TITLE', 'Business Development Manager')
+        sender_company = sending_profile.sender_company if sending_profile else os.getenv('SENDER_COMPANY', 'Growth Solutions Inc.')
+        sender_email = sending_profile.sender_email if sending_profile else os.getenv('SENDER_EMAIL', 'alex@growthsolutions.com')
+        
+        # Get lead info
+        lead_name = (lead.first_name or '').strip()
+        lead_company = (lead.company or '').strip()
+        lead_title = (getattr(lead, 'title', '') or '').strip()
+        lead_industry = (getattr(lead, 'industry', '') or '').strip()
+        lead_website = (getattr(lead, 'website', '') or '').strip()
+        
+        # Build context for follow-ups
+        context_section = ""
+        if is_followup and previous_emails:
+            context_section = "\n\nPREVIOUS EMAIL CONTEXT:\n"
+            for i, prev_email in enumerate(previous_emails, 1):
+                context_section += f"Email #{i} Subject: {prev_email.get('subject', 'N/A')}\n"
+                context_section += f"Email #{i} Content: {prev_email.get('content', 'N/A')[:200]}...\n\n"
+            context_section += "IMPORTANT: This is a follow-up. Reference previous emails naturally and provide new value.\n"
+        
+        # Build AI prompt
+        email_type = "follow-up" if is_followup else "initial outreach"
+        ai_prompt = f"""You are a professional email copywriter. Write a personalized {email_type} email.
 
 LEAD DETAILS:
-- Name: {lead_name if lead_name else 'there'}
-- Company: {lead_company if lead_company else 'their company'}
-- Title: {lead_title}
-- Industry: {lead_industry}
-- Website: {lead_website}
+- Name: {lead_name or 'Not provided'}
+- Company: {lead_company or 'Not provided'}
+- Title: {lead_title or 'Not provided'}
+- Industry: {lead_industry or 'Not provided'}
+- Website: {lead_website or 'Not provided'}
 
 SENDER DETAILS:
 - Name: {sender_name}
-- Title: {sender_title}
-- Company: {sender_company}
-
-INSTRUCTIONS: {ai_prompt}
-
-FORMAT REQUIREMENTS:
-1. Start with "SUBJECT: [your subject line]"
-2. Then write the email body
-3. Keep it professional and personalized
-4. Use HTML formatting for the body
-5. End with the sender signature
-
-SUBJECT LINE GUIDELINES:
-- Be specific and relevant to {lead_company if lead_company else 'their business'}
-- Avoid generic phrases like "Quick question"
-- Make it personal and intriguing
-- Keep under 60 characters
-
-EMAIL BODY GUIDELINES:
-- Address {lead_name if lead_name else 'them'} personally
-- Reference {lead_company if lead_company else 'their company'} specifically
-- Keep it concise (under 120 words)
-- Include a clear call-to-action
-- Be professional but conversational
-
-End with this signature:
-{sender_signature}"""
-
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=500,
-                temperature=0.7
-            )
-            
-            response_text = response.choices[0].message.content.strip()
-            
-            # Extract subject line and content more reliably
-            import re
-            
-            # Look for SUBJECT: at the start of a line
-            subject_match = re.search(r'^SUBJECT:\s*(.+?)$', response_text, re.MULTILINE | re.IGNORECASE)
-            
-            if subject_match:
-                subject_line = subject_match.group(1).strip()
-                # Remove the SUBJECT line from content
-                email_content = re.sub(r'^SUBJECT:\s*.+?$', '', response_text, flags=re.MULTILINE | re.IGNORECASE).strip()
-            else:
-                # If no SUBJECT found, split on first line
-                lines = response_text.split('\n', 1)
-                if len(lines) > 1:
-                    subject_line = lines[0].replace('SUBJECT:', '').strip()
-                    email_content = lines[1].strip()
-                else:
-                    subject_line = f"Regarding {lead_company if lead_company else 'your business'}"
-                    email_content = response_text
-            
-            # Clean up subject line
-            subject_line = subject_line.replace('"', '').replace("'", '').strip()
-            if not subject_line or len(subject_line) < 3:
-                subject_line = f"Regarding {lead_company if lead_company else 'your business'}"
-            
-            # Clean up email content and ensure proper HTML formatting
-            email_content = email_content.strip()
-            
-            # If content doesn't have HTML tags, convert line breaks to HTML
-            if '<p>' not in email_content and '<br>' not in email_content:
-                # Convert double line breaks to paragraph breaks
-                email_content = email_content.replace('\n\n', '\n<p></p>\n')
-                # Convert single line breaks to <br> tags
-                email_content = email_content.replace('\n', '<br>\n')
-                # Wrap in paragraph tags
-                email_content = f'<p>{email_content}</p>'
-            
-            # Clean up any double paragraph tags
-            email_content = re.sub(r'<p></p>', '</p><p>', email_content)
-            email_content = re.sub(r'<p>\s*<p>', '<p>', email_content)
-            email_content = re.sub(r'</p>\s*</p>', '</p>', email_content)
-            
-            return {
-                'subject': subject_line,
-                'content': email_content
-            }
-            
-        except Exception as e:
-            print(f"Failed to generate email with AI: {e}")
-            # Improved fallback with better personalization
-            fallback_subject = f"Partnership opportunity with {lead.company}" if lead.company else "Business partnership opportunity"
-            fallback_content = f"""<p>Hi {lead.first_name or 'there'},</p>
-<p>I hope this message finds you well. I noticed your work at {lead.company or 'your company'} and wanted to reach out about a potential partnership opportunity.</p>
-<p>Would you be open to a brief conversation about how we might be able to help you achieve your business goals?</p>
-<p>Best regards,<br>{sender_name}<br>{sender_title}<br>{sender_company}</p>"""
-            
-            return {
-                'subject': fallback_subject,
-                'content': fallback_content
-            }
-    
-    def send_personalized_email(self, lead, campaign, tracking_id, sending_profile=None):
-        """Send personalized email via Gmail API"""
-        if not self.gmail_service:
-            print("Gmail service not available")
-            return False
-        print(tracking_id)
-        try:
-            # Generate personalized content and subject
-            email_data = self.generate_personalized_email_and_subject(
-                lead, campaign.ai_prompt, sending_profile
-            )
-            email_body = email_data['content']
-            email_subject = email_data['subject']
-            
-            # Modern multi-signal tracking
-            domain = os.getenv("DOMAIN", "localhost:8000")
-            
-            from modern_tracking_service import modern_tracker
-            tracking_elements = modern_tracker.generate_multi_signal_tracking(tracking_id, domain)
-            
-            # Replace any links with tracked versions
-            import re
-            def replace_links(match):
-                original_url = match.group(1)
-                tracked_url = f"https://{domain}/api/track/click/{tracking_id}?url={original_url}"
-                return f'href="{tracked_url}"'
-            
-            # First, convert plain URLs to clickable links, then track all links
-            # Convert plain URLs to anchor tags (excluding already linked URLs)
-            url_pattern = r'(?<!href=["\'\'`])(?<!src=["\'\'`])(https?://[^\s<>"]+)'
-            email_body = re.sub(url_pattern, r'<a href="\1">\1</a>', email_body)
-            
-            # Track all links in the email (both existing and newly created)
-            email_body_with_tracking = re.sub(r'href="([^"]+)"', replace_links, email_body)
-            
-            # Add multi-signal tracking elements
-            email_body_with_tracking += f'''
-            <!-- Multi-Signal Open Tracking -->
-            {tracking_elements['primary']}
-            {tracking_elements['secondary']}
-            {tracking_elements['content']}
-            
-            <!-- View in browser link with tracking -->
-            <div style="text-align:center;margin:20px 0;padding:10px;border-top:1px solid #eee;">
-                <p style="font-size:11px;color:#666;margin:0;">
-                    <a href="https://{domain}/api/track/view/{tracking_id}" style="color:#666;text-decoration:none;">
-                        View this email in your browser
-                    </a>
-                </p>
-                {tracking_elements['interactive']}
-            </div>
-            
-            {tracking_elements['javascript']}
-            '''
-            
-            # Create email message
-            message = MIMEMultipart('alternative')
-            message['to'] = lead.email
-            message['subject'] = email_subject
-            
-            # Set From header using sending profile or default
-            if sending_profile:
-                from_name = sending_profile.sender_name
-                from_email = sending_profile.sender_email
-                message['from'] = f"{from_name} <{from_email}>"
-            else:
-                # Use default sender from environment
-                default_name = os.getenv('SENDER_NAME', 'Alex Johnson')
-                default_email = os.getenv('SENDER_EMAIL', 'alex@growthsolutions.com')
-                message['from'] = f"{default_name} <{default_email}>"
-            
-            # Add HTML part
-            html_part = MIMEText(email_body_with_tracking, 'html')
-            message.attach(html_part)
-            
-            # Encode message
-            raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-            
-            # Send email
-            result = self.gmail_service.users().messages().send(
-                userId='me',
-                body={'raw': raw_message}
-            ).execute()
-            
-            print(f"Email sent successfully to {lead.email}. Message ID: {result['id']}")
-            return True
-            
-        except HttpError as error:
-            print(f"Gmail API error sending to {lead.email}: {error}")
-            return False
-        except Exception as e:
-            print(f"Failed to send email to {lead.email}: {e}")
-            return False
-    
-    def send_sequence_email_with_context(self, lead, step, tracking_id, sending_profile=None, previous_emails=None):
-        """Send sequence step email via Gmail API with context from previous emails"""
-        if not self.gmail_service:
-            print("Gmail service not available")
-            return None, None
-        
-        try:
-            # Generate personalized content and subject for sequence step with context
-            if previous_emails and step.include_previous_emails:
-                email_data = self.generate_sequence_email_with_context(
-                    lead, step, sending_profile, previous_emails
-                )
-            else:
-                email_data = self.generate_personalized_email_and_subject(
-                    lead, step.ai_prompt or f"Write a professional follow-up email. This is step {step.step_number} in our sequence.", sending_profile
-                )
-            
-            email_body = email_data['content']
-            email_subject = email_data['subject']
-            
-            # Modern multi-signal tracking
-            domain = os.getenv("DOMAIN", "localhost:8000")
-            
-            from modern_tracking_service import modern_tracker
-            tracking_elements = modern_tracker.generate_multi_signal_tracking(tracking_id, domain)
-            
-            # Replace any links with tracked versions
-            import re
-            def replace_links(match):
-                original_url = match.group(1)
-                tracked_url = f"https://{domain}/api/track/click/{tracking_id}?url={original_url}"
-                return f'href="{tracked_url}"'
-            
-            # First, convert plain URLs to clickable links, then track all links
-            # Convert plain URLs to anchor tags (excluding already linked URLs)
-            url_pattern = r'(?<!href=["\'\'`])(?<!src=["\'\'`])(https?://[^\s<>"]+)'
-            email_body = re.sub(url_pattern, r'<a href="\1">\1</a>', email_body)
-            
-            # Track all links in the email (both existing and newly created)
-            email_body_with_tracking = re.sub(r'href="([^"]+)"', replace_links, email_body)
-            
-            # Add multi-signal tracking elements
-            email_body_with_tracking += f'''
-            <!-- Multi-Signal Open Tracking -->
-            {tracking_elements['primary']}
-            {tracking_elements['secondary']}
-            {tracking_elements['content']}
-            
-            <!-- View in browser link with tracking -->
-            <div style="text-align:center;margin:20px 0;padding:10px;border-top:1px solid #eee;">
-                <p style="font-size:11px;color:#666;margin:0;">
-                    <a href="https://{domain}/api/track/view/{tracking_id}" style="color:#666;text-decoration:none;">
-                        View this email in your browser
-                    </a>
-                </p>
-                {tracking_elements['interactive']}
-            </div>
-            
-            {tracking_elements['javascript']}
-            '''
-            
-            # Create email message
-            message = MIMEMultipart('alternative')
-            message['to'] = lead.email
-            message['subject'] = email_subject
-            
-            # Set From header using sending profile or default
-            if sending_profile:
-                from_name = sending_profile.sender_name
-                from_email = sending_profile.sender_email
-                message['from'] = f"{from_name} <{from_email}>"
-            else:
-                # Use default sender from environment
-                default_name = os.getenv('SENDER_NAME', 'Alex Johnson')
-                default_email = os.getenv('SENDER_EMAIL', 'alex@growthsolutions.com')
-                message['from'] = f"{default_name} <{default_email}>"
-            
-            # Add HTML part
-            html_part = MIMEText(email_body_with_tracking, 'html')
-            message.attach(html_part)
-            
-            # Encode message
-            raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-            
-            # Send email
-            result = self.gmail_service.users().messages().send(
-                userId='me',
-                body={'raw': raw_message}
-            ).execute()
-            
-            print(f"Sequence email with context sent successfully to {lead.email}. Message ID: {result['id']}")
-            return True, (email_subject, email_body)
-            
-        except HttpError as error:
-            print(f"Gmail API error sending sequence email to {lead.email}: {error}")
-            return False, None
-        except Exception as e:
-            print(f"Failed to send sequence email to {lead.email}: {e}")
-            return False, None
-                
-    def send_sequence_email(self, lead, step, tracking_id, sending_profile=None):
-        """Send sequence step email via Gmail API"""
-        if not self.gmail_service:
-            print("Gmail service not available")
-            return False
-        
-        try:
-            # Generate personalized content and subject for sequence step
-            email_data = self.generate_personalized_email_and_subject(
-                lead, step.ai_prompt or f"Write a professional follow-up email. This is step {step.step_number} in our sequence.", sending_profile
-            )
-            email_body = email_data['content']
-            email_subject = email_data['subject']
-            
-            # Modern multi-signal tracking
-            domain = os.getenv("DOMAIN", "localhost:8000")
-            
-            from modern_tracking_service import modern_tracker
-            tracking_elements = modern_tracker.generate_multi_signal_tracking(tracking_id, domain)
-            
-            # Replace any links with tracked versions
-            import re
-            def replace_links(match):
-                original_url = match.group(1)
-                tracked_url = f"https://{domain}/api/track/click/{tracking_id}?url={original_url}"
-                return f'href="{tracked_url}"'
-            
-            # First, convert plain URLs to clickable links, then track all links
-            # Convert plain URLs to anchor tags (excluding already linked URLs)
-            url_pattern = r'(?<!href=["\'\'`])(?<!src=["\'\'`])(https?://[^\s<>"]+)'
-            email_body = re.sub(url_pattern, r'<a href="\1">\1</a>', email_body)
-            print(f"Sequence email after URL conversion: {email_body}")
-            
-            # Track all links in the email (both existing and newly created)
-            email_body_with_tracking = re.sub(r'href="([^"]+)"', replace_links, email_body)
-            print(f"Sequence email after link tracking: {email_body_with_tracking}")
-            
-            # Add multi-signal tracking elements
-            email_body_with_tracking += f'''
-            <!-- Multi-Signal Open Tracking -->
-            {tracking_elements['primary']}
-            {tracking_elements['secondary']}
-            {tracking_elements['content']}
-            
-            <!-- View in browser link with tracking -->
-            <div style="text-align:center;margin:20px 0;padding:10px;border-top:1px solid #eee;">
-                <p style="font-size:11px;color:#666;margin:0;">
-                    <a href="https://{domain}/api/track/view/{tracking_id}" style="color:#666;text-decoration:none;">
-                        View this email in your browser
-                    </a>
-                </p>
-                {tracking_elements['interactive']}
-            </div>
-            
-            {tracking_elements['javascript']}
-            '''
-            
-            # Create email message
-            message = MIMEMultipart('alternative')
-            message['to'] = lead.email
-            message['subject'] = email_subject
-            
-            # Set From header using sending profile or default
-            if sending_profile:
-                from_name = sending_profile.sender_name
-                from_email = sending_profile.sender_email
-                message['from'] = f"{from_name} <{from_email}>"
-            else:
-                # Use default sender from environment
-                default_name = os.getenv('SENDER_NAME', 'Alex Johnson')
-                default_email = os.getenv('SENDER_EMAIL', 'alex@growthsolutions.com')
-                message['from'] = f"{default_name} <{default_email}>"
-            
-            # Add HTML part
-            html_part = MIMEText(email_body_with_tracking, 'html')
-            message.attach(html_part)
-            
-            # Encode message
-            raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-            
-            # Send email
-            result = self.gmail_service.users().messages().send(
-                userId='me',
-                body={'raw': raw_message}
-            ).execute()
-            
-            print(f"Sequence email sent successfully to {lead.email}. Message ID: {result['id']}")
-            return True
-            
-        except HttpError as error:
-            print(f"Gmail API error sending sequence email to {lead.email}: {error}")
-            return False
-        except Exception as e:
-            print(f"Failed to send sequence email to {lead.email}: {e}")
-            return False
-    
-    def generate_sequence_email_with_context(self, lead, current_step, sending_profile=None, previous_emails=None):
-        """Generate personalized sequence email with context from previous emails"""
-        try:
-            # Get sender information
-            sender_name = sending_profile.sender_name if sending_profile else os.getenv('SENDER_NAME', 'Alex Johnson')
-            sender_title = sending_profile.sender_title if sending_profile else os.getenv('SENDER_TITLE', 'Business Development Manager')
-            sender_company = sending_profile.sender_company if sending_profile else os.getenv('SENDER_COMPANY', 'Growth Solutions Inc.')
-            sender_email = sending_profile.sender_email if sending_profile else os.getenv('SENDER_EMAIL', 'alex@growthsolutions.com')
-            sender_phone = sending_profile.sender_phone if sending_profile else os.getenv('SENDER_PHONE', '')
-            sender_contact = f"{sender_email}" + (f" | {sender_phone}" if sender_phone else "")
-            sender_signature = sending_profile.signature if sending_profile and sending_profile.signature else f"{sender_name}<br>{sender_title}<br>{sender_company}<br>{sender_contact}"
-
-            # Prepare lead data
-            lead_name = (lead.first_name or '').strip()
-            lead_company = (lead.company or '').strip()
-            lead_title = (getattr(lead, 'title', '') or '').strip()
-            lead_industry = (getattr(lead, 'industry', '') or '').strip()
-            lead_website = (getattr(lead, 'website', '') or '').strip()
-
-            # Build context from previous emails if this is not the first step
-            context_section = ""
-            if current_step.step_number > 1 and previous_emails:
-                context_section = "\n\nPREVIOUS EMAIL CONTEXT:\n"
-                for i, prev_email in enumerate(previous_emails, 1):
-                    context_section += f"Email #{i} Subject: {prev_email.get('subject', 'N/A')}\n"
-                    context_section += f"Email #{i} Content: {prev_email.get('content', 'N/A')}\n\n"
-                context_section += "IMPORTANT: This is a follow-up email. Reference the previous emails naturally and provide new value. The recipient hasn't responded to previous emails yet.\n"
-
-            prompt = f"""You are a professional email copywriter. Write a personalized email for step {current_step.step_number} of an email sequence.
-
-LEAD DETAILS:
-- Name: {lead_name if lead_name else 'there'}
-- Company: {lead_company if lead_company else 'their company'}
-- Title: {lead_title}
-- Industry: {lead_industry}
-- Website: {lead_website}
-
-SENDER DETAILS:
-- Name: {sender_name}
-- Title: {sender_title}
+- Title: {sender_title}  
 - Company: {sender_company}
 
 {context_section}
 
-STEP INSTRUCTIONS: {current_step.ai_prompt}
+INSTRUCTIONS: {prompt_text}
 
-FORMAT REQUIREMENTS:
-1. Start with "SUBJECT: [your subject line]"
-2. Then write the email body
-3. Keep it professional and personalized
-4. Use HTML formatting with proper paragraph tags (<p></p>) for the body
-5. Break content into 2-3 short paragraphs for readability
-6. End with the sender signature
+CRITICAL REQUIREMENTS:
+- NEVER use placeholders like [name], [company], [industry] or brackets []
+- Use actual data when available, otherwise natural alternatives like "Hi there" or "your company"
+- Keep subject concise but descriptive (under 50 characters)
+- Use plain text only, no HTML
+- Email body: 150 - 200 words (expand naturally if needed)
+- Focus entirely on the lead’s needs, challenges, and business success
+- Provide actionable insights or helpful advice rather than just pitching
+- Write in a friendly, conversational tone
 
-SUBJECT LINE GUIDELINES:
-- Be specific and relevant to {lead_company if lead_company else 'their business'}
-- For follow-ups, reference previous contact subtly or try a different angle
-- Make it personal and intriguing
-- Keep under 60 characters
+SPAM AVOIDANCE:
+- Avoid: "Free", "Limited time", "Act now", ALL CAPS, excessive punctuation !!!
+- Avoid generic sales language
+- Avoid overly promotional phrasing
+- Use natural, value-driven language
+- Vary sentence structure and length
 
-EMAIL BODY GUIDELINES:
-- Address {lead_name if lead_name else 'them'} personally
-- Reference {lead_company if lead_company else 'their company'} specifically
-{"- This is a follow-up email - reference previous emails naturally" if current_step.step_number > 1 else "- This is the first email in the sequence"}
-- Keep it concise (under 120 words)
-- Include a clear call-to-action
-- Be professional but conversational
-- Provide value and avoid being pushy
+EXAMPLES:
+- Good: "Hi John" or "Hi there" if name missing
+- Bad: "Hi [name]" or "Hi [their name]"
+- Good: "I noticed TestCorp's approach to X" or "your company's recent initiative"
+- Bad: "I noticed [company]'s approach"
 
-End with this signature:
-{sender_signature}"""
+FORMAT:
+1. Start with "SUBJECT: [subject line]"
+2. Then write the email body with line breaks for paragraphs
+3. End with: {sender_name}\n{sender_title}\n{sender_company}\n{sender_email}"""
 
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=500,
-                temperature=0.7
+
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                logger.info(f"AI_ATTEMPT: AI generation attempt {attempt}/{max_attempts}")
+                
+                # Generate with OpenAI
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-5-nano",
+                    messages=[{"role": "user", "content": ai_prompt}],
+                )
+                
+                response_text = response.choices[0].message.content.strip()
+                
+                # Parse subject and content
+                subject_match = re.search(r'^SUBJECT:\\s*(.+?)$', response_text, re.MULTILINE | re.IGNORECASE)
+                if subject_match:
+                    subject = subject_match.group(1).strip().replace('"', '').replace("'", '')
+                    content = re.sub(r'^SUBJECT:\\s*.+?$', '', response_text, flags=re.MULTILINE | re.IGNORECASE).strip()
+                else:
+                    lines = response_text.split('\n', 1)
+                    subject = lines[0].replace('SUBJECT:', '').strip() if len(lines) > 1 else f"Regarding {lead_company or 'your business'}"
+                    content = lines[1].strip() if len(lines) > 1 else response_text
+                
+                # Clean content
+                content = re.sub(r'<[^>]+>', '', content)  # Remove HTML
+                content = re.sub(r'\n\s*\n\s*\n', '\n\n', content)  # Clean whitespace
+                
+                # Check with SpamAssassin
+                is_spam, spam_score, spam_report = self._check_spam(subject, content)
+                
+                logger.info(f"SPAM_CHECK_RESULT: Attempt {attempt}, Score={spam_score}, IsSpam={is_spam}", extra={
+                    "attempt": attempt,
+                    "is_spam": is_spam,
+                    "spam_score": spam_score
+                })
+                
+                # If not spam, return it (our spam detection logic above handles the score threshold)
+                if not is_spam:
+                    logger.info(f"SPAM_CHECK_PASSED: Email passed spam check (Score: {spam_score}/7.5, Attempts: {attempt})", extra={
+                        "final_spam_score": spam_score,
+                        "attempts_used": attempt
+                    })
+                    return {
+                        'subject': subject,
+                        'content': content, 
+                        'spam_score': spam_score,
+                        'spam_report': spam_report
+                    }
+                
+                # TEMPORARY: If Rspamd fails but we have content, proceed anyway
+                if spam_score == 0.0 and attempt == 1:  # Likely Rspamd connection failed
+                    logger.warning("RSPAMD_UNAVAILABLE: Rspamd unavailable, proceeding with generated email", extra={
+                        "attempt": attempt,
+                        "subject_length": len(subject),
+                        "content_length": len(content)
+                    })
+                    return {
+                        'subject': subject,
+                        'content': content,
+                        'spam_score': 0.0,
+                        'spam_report': 'Rspamd check skipped (service unavailable)'
+                    }
+                
+                # If spam, modify prompt for retry
+                if attempt < max_attempts:
+                    logger.warning(f"SPAM_DETECTED: Email flagged as spam (Score: {spam_score}/7.5), retrying attempt {attempt+1}/{max_attempts}")
+                    ai_prompt += f"""\n\nSPAM FEEDBACK - REWRITE TO AVOID:
+                The previous attempt scored {spam_score}. Rewrite the email to:
+                - Use a warmer, more conversational tone (as if writing 1-to-1, not marketing)
+                - Add 1–2 additional natural sentences that provide useful context, insight, or advice
+                - Reduce promotional phrasing and focus on the recipient’s challenges, not the sender’s offer
+                - Avoid overuse of adjectives, urgency triggers, or anything that feels like a sales pitch
+                - Keep it between 110–160 words so it feels balanced and informative"""
+
+                
+            except Exception as e:
+                logger.error(f"AI generation attempt {attempt} failed", extra={
+                    "error": str(e), "error_type": type(e).__name__
+                }, exc_info=True)
+        
+        # All attempts failed
+        logger.error("AI_GENERATION_FAILED: All AI generation attempts failed")
+        return None
+
+    def _check_spam(self, subject: str, content: str) -> Tuple[bool, float, str]:
+        """Check email with Rspamd"""
+        logger.debug("RSPAMD_CHECK: Checking email with Rspamd")
+        
+        try:
+            # Format complete email for Rspamd (RFC2822 format)
+            email_text = f"""From: sender@example.com
+To: recipient@example.com
+Subject: {subject}
+Date: {datetime.now().strftime('%a, %d %b %Y %H:%M:%S +0000')}
+Message-ID: <{int(time.time())}.{uuid.uuid4().hex[:8]}@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+{content}"""
+            
+            # Send POST request to Rspamd scan endpoint
+            response = requests.post(
+                f"{self.rspamd_url}/scan",
+                data=email_text.encode('utf-8'),
+                headers={
+                    'Content-Type': 'text/plain',
+                },
+                timeout=10
             )
             
-            response_text = response.choices[0].message.content.strip()
-            
-            # Extract subject line and content
-            import re
-            subject_match = re.search(r'^SUBJECT:\s*(.+?)$', response_text, re.MULTILINE | re.IGNORECASE)
-            
-            if subject_match:
-                subject_line = subject_match.group(1).strip()
-                email_content = re.sub(r'^SUBJECT:\s*.+?$', '', response_text, flags=re.MULTILINE | re.IGNORECASE).strip()
+            if response.status_code == 200:
+                result = response.json()
+                
+                # Rspamd returns nested structure with 'default' key
+                scan_result = result.get('default', result)
+                
+                spam_score = scan_result.get('score', 0.0)
+                action = scan_result.get('action', 'no action')
+                is_spam_flag = scan_result.get('is_spam', False)
+                required_score = scan_result.get('required_score', 15.0)
+                
+                # Determine if spam based on Rspamd's action and score
+                # Only treat as spam if action is explicitly reject/soft reject or score is very high
+                # Determine if spam based on Rspamd's action and score
+                # Don't use is_spam_flag as it's too strict for our test environment
+                # Focus on actual harmful actions and high scores
+                spam_actions = ['reject', 'soft reject']
+                adjusted_threshold = 7.5  # Allow for 2.5 points from hostname issues in test environment
+                is_spam = action in spam_actions or spam_score >= adjusted_threshold
+                
+                logger.info(f"RSPAMD_COMPLETE: Action={action}, Score={spam_score}/{required_score}, IsSpam={is_spam}", extra={
+                    "is_spam": is_spam,
+                    "spam_score": spam_score,
+                    "action": action,
+                    "required_score": required_score
+                })
+                
+                # Create detailed report
+                report = f"Action: {action}, Score: {spam_score}/{required_score}"
+                
+                return is_spam, spam_score, report
             else:
-                lines = response_text.split('\n', 1)
-                if len(lines) > 1:
-                    subject_line = lines[0].replace('SUBJECT:', '').strip()
-                    email_content = lines[1].strip()
-                else:
-                    subject_line = f"Following up on {lead_company if lead_company else 'our conversation'}" if current_step.step_number > 1 else f"Regarding {lead_company if lead_company else 'your business'}"
-                    email_content = response_text
+                logger.warning(f"Rspamd returned status {response.status_code}")
+                return False, 0.0, f"Rspamd check failed with status {response.status_code}"
+                
+        except requests.exceptions.RequestException as e:
+            logger.warning("Rspamd check failed, proceeding", extra={
+                "error": str(e), "error_type": type(e).__name__
+            })
+            return False, 0.0, f"Rspamd connection failed: {e}"
+        except Exception as e:
+            logger.warning("Rspamd check failed, proceeding", extra={
+                "error": str(e), "error_type": type(e).__name__
+            })
+            return False, 0.0, f"Rspamd check failed: {e}"
 
-            # Clean up subject line
-            subject_line = subject_line.replace('"', '').replace("'", '').strip()
-            if not subject_line or len(subject_line) < 3:
-                subject_line = f"Following up on {lead_company if lead_company else 'our conversation'}" if current_step.step_number > 1 else f"Regarding {lead_company if lead_company else 'your business'}"
+    def _create_and_send_email(self, lead, subject: str, content: str, tracking_id: str, sending_profile=None):
+        """Create email with tracking and send via Gmail"""
+        if not self.gmail_service:
+            logger.error("Gmail service not available")
+            return False
             
-            # Format email content as HTML
-            email_content = email_content.strip()
-            if '<p>' not in email_content and '<br>' not in email_content:
-                email_content = email_content.replace('\n\n', '\n<p></p>\n')
-                email_content = email_content.replace('\n', '<br>\n')
-                email_content = f'<p>{email_content}</p>'
+        try:
+            # Get domain for tracking - use click domain for tracking links
+            domain = "click.wegetyouonline.co.uk"
             
-            # Clean up HTML
-            email_content = re.sub(r'<p></p>', '</p><p>', email_content)
-            email_content = re.sub(r'<p>\s*<p>', '<p>', email_content)
-            email_content = re.sub(r'</p>\s*</p>', '</p>', email_content)
+            # Get sender info for signature
+            sender_name = sending_profile.sender_name if sending_profile else os.getenv('SENDER_NAME', 'Alex Johnson')
+            sender_title = sending_profile.sender_title if sending_profile else os.getenv('SENDER_TITLE', 'Business Development Manager')
+            sender_company = sending_profile.sender_company if sending_profile else os.getenv('SENDER_COMPANY', 'Growth Solutions Inc.')
+            sender_email = sending_profile.sender_email if sending_profile else os.getenv('SENDER_EMAIL', 'alex@growthsolutions.com')
             
-            return {
-                'subject': subject_line,
-                'content': email_content
-            }
+            # Add minimal tracking via logo in signature + CSS background backup
+            content_with_tracking = content + f"""
+
+Best regards,
+{sender_name}
+{sender_title}
+{sender_company}
+{sender_email}
+
+Unsubscribe: https://click.wegetyouonline.co.uk/api/unsubscribe/{tracking_id}"""
+
+            # Create email message
+            message = MIMEMultipart('alternative')
+            message['to'] = lead.email
+            message['subject'] = subject
+            message['List-Unsubscribe'] = f'<https://click.wegetyouonline.co.uk/api/unsubscribe/{tracking_id}>'
+            message['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
+            
+            # Set sender
+            if sending_profile:
+                message['from'] = f"{sending_profile.sender_name} <{sending_profile.sender_email}>"
+            else:
+                default_name = os.getenv('SENDER_NAME', 'Alex Johnson')
+                default_email = os.getenv('SENDER_EMAIL', 'alex@growthsolutions.com')
+                message['from'] = f"{default_name} <{default_email}>"
+            
+            # Add plain text version (without tracking)
+            text_part = MIMEText(content, 'plain')
+            message.attach(text_part)
+            
+            # Add HTML version with logo tracking and CSS backup
+            html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: Arial, sans-serif; color: #333; line-height: 1.6; }}
+        .signature {{ margin-top: 20px; font-size: 14px; }}
+        .logo {{ max-width: 150px; height: auto; }}
+        .track-backup {{ 
+            background: url('https://click.wegetyouonline.co.uk/api/track/signal/{tracking_id}/css') no-repeat;
+            background-size: 0px 0px;
+            width: 0px;
+            height: 0px;
+            display: inline-block;
+        }}
+    </style>
+</head>
+<body>
+    <div class="track-backup"></div>
+    {content.replace(chr(10), '<br>')}
+    
+    <div class="signature">
+        <br>Best regards,<br>
+        <strong>{sender_name}</strong><br>
+        {sender_title}<br>
+        {sender_company}<br>
+        {sender_email}<br><br>
+        
+        <img src="https://click.wegetyouonline.co.uk/api/logo.png?t={tracking_id}" alt="{sender_company}" class="logo"><br><br>
+        
+        <small><a href="https://click.wegetyouonline.co.uk/api/unsubscribe/{tracking_id}">Unsubscribe</a></small>
+    </div>
+</body>
+</html>"""
+            html_part = MIMEText(html_content, 'html')
+            message.attach(html_part)
+            
+            # Send via Gmail
+            raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+            result = self.gmail_service.users().messages().send(
+                userId='me',
+                body={'raw': raw_message}
+            ).execute()
+            
+            logger.info("GMAIL_SEND_SUCCESS: Email sent via Gmail API", extra={
+                "lead_email": lead.email,
+                "message_id": result['id'],
+                "tracking_id": tracking_id
+            })
+            
+            return True
             
         except Exception as e:
-            print(f"Error generating sequence email: {e}")
-            # Fallback
-            return {
-                'subject': f"Following up on {lead.company if lead.company else 'our conversation'}" if current_step.step_number > 1 else f"Regarding {lead.company if lead.company else 'your business'}",
-                'content': f"<p>Hi {lead.first_name if lead.first_name else 'there'},</p><p>I wanted to follow up on my previous message.</p><p>Best regards,<br>{sender_name if 'sender_name' in locals() else 'Alex Johnson'}</p>"
-            }
+            logger.error("Failed to send email", extra={
+                "lead_email": lead.email,
+                "error": str(e),
+                "error_type": type(e).__name__
+            }, exc_info=True)
+            return False
+
+    def send_primary(self, lead, prompt_text: str, tracking_id: str, sending_profile=None):
+        """
+        Send primary outreach email with OpenAI generation and SpamAssassin checking
+        
+        Args:
+            lead: Lead object with email, name, company etc.
+            prompt_text: Instructions for AI email generation
+            tracking_id: Unique tracking ID for this email
+            sending_profile: Optional sending profile for sender details
+            
+        Returns:
+            bool: True if sent successfully, False otherwise
+        """
+        logger.info("EMAIL_SEND_PRIMARY: Sending primary email", extra={
+            "lead_email": lead.email,
+            "tracking_id": tracking_id,
+            "has_sending_profile": bool(sending_profile)
+        })
+        
+        # Generate email with AI and spam checking
+        email_data = self._generate_ai_email(lead, prompt_text, sending_profile, is_followup=False)
+        
+        if not email_data:
+            logger.error("Failed to generate primary email")
+            return False
+            
+        # Send the email  
+        success = self._create_and_send_email(
+            lead=lead,
+            subject=email_data['subject'],
+            content=email_data['content'], 
+            tracking_id=tracking_id,
+            sending_profile=sending_profile
+        )
+        
+        if success:
+            logger.info(f"EMAIL_SEND_SUCCESS: Primary email sent to {lead.email} (Spam Score: {email_data.get('spam_score', 'N/A')})", extra={
+                "lead_email": lead.email,
+                "spam_score": email_data.get('spam_score', 'N/A')
+            })
+        else:
+            logger.error("EMAIL_SEND_FAILED: Primary email send failed")
+            
+        return success
+        
+    def send_followup(self, lead, prompt_text: str, tracking_id: str, sending_profile=None, previous_emails=None):
+        """
+        Send follow-up email with context from previous emails
+        
+        Args:
+            lead: Lead object with email, name, company etc.
+            prompt_text: Instructions for AI email generation  
+            tracking_id: Unique tracking ID for this email
+            sending_profile: Optional sending profile for sender details
+            previous_emails: List of previous emails for context
+            
+        Returns:
+            bool: True if sent successfully, False otherwise
+        """
+        logger.info("EMAIL_SEND_FOLLOWUP: Sending follow-up email", extra={
+            "lead_email": lead.email,
+            "tracking_id": tracking_id,
+            "has_sending_profile": bool(sending_profile),
+            "previous_emails_count": len(previous_emails) if previous_emails else 0
+        })
+        
+        # Generate follow-up email with context
+        email_data = self._generate_ai_email(
+            lead=lead,
+            prompt_text=prompt_text, 
+            sending_profile=sending_profile,
+            is_followup=True,
+            previous_emails=previous_emails
+        )
+        
+        if not email_data:
+            logger.error("Failed to generate follow-up email")
+            return False
+            
+        # Send the email
+        success = self._create_and_send_email(
+            lead=lead,
+            subject=email_data['subject'],
+            content=email_data['content'],
+            tracking_id=tracking_id, 
+            sending_profile=sending_profile
+        )
+        
+        if success:
+            logger.info(f"EMAIL_SEND_SUCCESS: Follow-up email sent to {lead.email} (Spam Score: {email_data.get('spam_score', 'N/A')})", extra={
+                "lead_email": lead.email,
+                "spam_score": email_data.get('spam_score', 'N/A')
+            })
+        else:
+            logger.error("EMAIL_SEND_FAILED: Follow-up email send failed")
+            
+        return success

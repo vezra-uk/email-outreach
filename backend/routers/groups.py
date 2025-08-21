@@ -49,6 +49,86 @@ def create_group(group: LeadGroupCreate, db: Session = Depends(get_db), current_
         created_at=db_group.created_at
     )
 
+@router.get("/{group_id}", response_model=LeadGroupDetail)
+def get_group_detail(group_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    group = db.query(LeadGroup).filter(LeadGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    leads = db.query(Lead).join(
+        LeadGroupMembership, Lead.id == LeadGroupMembership.lead_id
+    ).filter(LeadGroupMembership.group_id == group_id).all()
+    
+    return LeadGroupDetail(
+        id=group.id,
+        name=group.name,
+        description=group.description,
+        color=group.color,
+        created_at=group.created_at,
+        leads=leads
+    )
+
+@router.put("/{group_id}", response_model=LeadGroupResponse)
+def update_group(group_id: int, group_update: LeadGroupUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    db_group = db.query(LeadGroup).filter(LeadGroup.id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    update_data = group_update.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_group, field, value)
+    
+    db.commit()
+    db.refresh(db_group)
+    
+    lead_count = db.query(func.count(LeadGroupMembership.lead_id)).filter(
+        LeadGroupMembership.group_id == group_id
+    ).scalar() or 0
+    
+    return LeadGroupResponse(
+        id=db_group.id,
+        name=db_group.name,
+        description=db_group.description,
+        color=db_group.color,
+        lead_count=lead_count,
+        created_at=db_group.created_at
+    )
+
+@router.delete("/{group_id}")
+def delete_group(group_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    db_group = db.query(LeadGroup).filter(LeadGroup.id == group_id).first()
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # Delete memberships first
+    db.query(LeadGroupMembership).filter(LeadGroupMembership.group_id == group_id).delete()
+    # Delete group
+    db.delete(db_group)
+    db.commit()
+    
+    return {"message": "Group deleted successfully"}
+
+@router.post("/{group_id}/members")
+def update_group_members(group_id: int, membership_update: GroupMembershipUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    # Check if group exists
+    group = db.query(LeadGroup).filter(LeadGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # Remove existing memberships
+    db.query(LeadGroupMembership).filter(LeadGroupMembership.group_id == group_id).delete()
+    
+    # Add new memberships
+    for lead_id in membership_update.lead_ids:
+        # Verify lead exists
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        if lead:
+            membership = LeadGroupMembership(group_id=group_id, lead_id=lead_id)
+            db.add(membership)
+    
+    db.commit()
+    return {"message": f"Updated group members: {len(membership_update.lead_ids)} leads"}
+
 @router.get("/{group_id}/leads")
 def get_group_leads(group_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     leads = db.query(Lead).join(

@@ -48,3 +48,4 @@ ENV/
 
 # Docker
 .dockerignore
+backend/logo.png
