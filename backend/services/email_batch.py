@@ -51,7 +51,7 @@ def send_sequence_batch():
         due_sequences = db.query(LeadCampaign).filter(
             LeadCampaign.status == "active",
             LeadCampaign.next_send_at <= now
-        ).limit(min(remaining_quota, 50)).all()
+        ).order_by(LeadCampaign.next_send_at.asc()).limit(min(remaining_quota, 50)).all()
         
         sequences_processed = len(due_sequences)
         
@@ -62,8 +62,8 @@ def send_sequence_batch():
             sequences_processed = len(due_sequences)
             print(f"Limiting batch to {max_batch_size} emails to mimic human sending patterns")
         
-        # Shuffle the sequences to avoid predictable patterns
-        random.shuffle(due_sequences)
+        # Sequences are already ordered by next_send_at (oldest first) to prioritize overdue emails
+        print(f"Processing {len(due_sequences)} emails in chronological order (oldest first)")
         
         # Add a small initial random delay to spread out batch processing
         initial_delay = random.randint(5, 60)
@@ -93,6 +93,12 @@ def send_sequence_batch():
                 sending_profile = None
                 if sequence.sending_profile_id:
                     sending_profile = db.query(SendingProfile).filter(SendingProfile.id == sequence.sending_profile_id).first()
+                
+                # Check if sending is allowed based on schedule (skip this email if not)
+                is_allowed, schedule_reason = email_service.is_sending_allowed(sending_profile)
+                if not is_allowed:
+                    print(f"Skipping email for lead {lead_seq.lead_id}: {schedule_reason}")
+                    continue
                 
                 reply_check = db.query(EmailReply).filter(
                     EmailReply.lead_id == lead.id,
@@ -133,9 +139,9 @@ def send_sequence_batch():
                 import uuid
                 tracking_id = str(uuid.uuid4())
                 
-                # Use new followup function with spam checking and tracking
-                ai_prompt = current_step.ai_prompt or f"Write a professional follow-up email. This is step {current_step.step_number} in our sequence."
-                success = email_service.send_followup(
+                # Use email function with spam checking and tracking
+                ai_prompt = current_step.ai_prompt or f"Write a professional email. This is step {current_step.step_number} in our sequence."
+                success = email_service.send_email(
                     lead=lead,
                     prompt_text=ai_prompt,
                     tracking_id=tracking_id,

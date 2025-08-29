@@ -6,8 +6,10 @@ import io
 from database import get_db
 from models import Lead
 from models.user import User
+from models.groups import LeadGroup, LeadGroupMembership
 from schemas.csv_upload import CSVUploadRequest, CSVPreviewRequest, CSVPreviewResponse
 from schemas.lead import LeadCreate, LeadResponse
+from schemas.groups import LeadGroupCreate
 from dependencies import get_current_active_user
 
 router = APIRouter(prefix="/leads/csv", tags=["csv"])
@@ -93,8 +95,44 @@ def upload_csv_leads(csv_request: CSVUploadRequest, db: Session = Depends(get_db
     if email_column not in headers:
         raise HTTPException(status_code=400, detail=f"Email column '{email_column}' not found in CSV headers")
     
-    created_leads = []
+    # Handle group assignment
+    target_group_id = None
     errors = []
+    
+    if csv_request.new_group_name:
+        # Create new group
+        existing_group = db.query(LeadGroup).filter(LeadGroup.name == csv_request.new_group_name).first()
+        if existing_group:
+            errors.append(f"Group '{csv_request.new_group_name}' already exists")
+            return {
+                "created": 0,
+                "errors": errors,
+                "skipped": 0,
+                "total_processed": len(data_rows),
+                "leads": []
+            }
+        
+        new_group_data = LeadGroupCreate(name=csv_request.new_group_name)
+        new_group = LeadGroup(**new_group_data.dict())
+        db.add(new_group)
+        db.flush()
+        target_group_id = new_group.id
+        
+    elif csv_request.group_id:
+        # Verify existing group exists
+        existing_group = db.query(LeadGroup).filter(LeadGroup.id == csv_request.group_id).first()
+        if not existing_group:
+            errors.append(f"Group with ID {csv_request.group_id} not found")
+            return {
+                "created": 0,
+                "errors": errors,
+                "skipped": 0,
+                "total_processed": len(data_rows),
+                "leads": []
+            }
+        target_group_id = csv_request.group_id
+
+    created_leads = []
     skipped = 0
     
     for row_index, row in enumerate(data_rows, start=1):
@@ -140,6 +178,13 @@ def upload_csv_leads(csv_request: CSVUploadRequest, db: Session = Depends(get_db
         db.commit()
         for lead in created_leads:
             db.refresh(lead)
+        
+        # Assign leads to group if specified
+        if target_group_id and created_leads:
+            for lead in created_leads:
+                membership = LeadGroupMembership(group_id=target_group_id, lead_id=lead.id)
+                db.add(membership)
+            db.commit()
     
     return {
         "created": len(created_leads),

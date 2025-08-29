@@ -1,5 +1,6 @@
 import logging
 import logging.handlers
+import os
 import structlog
 import sys
 from datetime import datetime
@@ -68,27 +69,29 @@ def setup_logging(log_level: str = "INFO", log_file: str = "app.log") -> None:
     console_handler.setFormatter(console_formatter)
     root_logger.addHandler(console_handler)
     
-    # File handler with rotation
-    file_handler = logging.handlers.RotatingFileHandler(
-        log_dir / log_file,
-        maxBytes=10 * 1024 * 1024,  # 10MB
-        backupCount=5,
-        encoding='utf-8'
-    )
-    file_handler.setLevel(log_level_obj)
-    file_handler.setFormatter(file_formatter)
-    root_logger.addHandler(file_handler)
+    # File handler with rotation (only if not disabled)
+    if not os.getenv("DISABLE_FILE_LOGGING"):
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_dir / log_file,
+            maxBytes=10 * 1024 * 1024,  # 10MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+        file_handler.setLevel(log_level_obj)
+        file_handler.setFormatter(file_formatter)
+        root_logger.addHandler(file_handler)
     
-    # Error-specific file handler
-    error_handler = logging.handlers.RotatingFileHandler(
-        log_dir / "errors.log",
-        maxBytes=10 * 1024 * 1024,  # 10MB
-        backupCount=10,
-        encoding='utf-8'
-    )
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(file_formatter)
-    root_logger.addHandler(error_handler)
+    # Error-specific file handler (only if not disabled)
+    if not os.getenv("DISABLE_FILE_LOGGING"):
+        error_handler = logging.handlers.RotatingFileHandler(
+            log_dir / "errors.log",
+            maxBytes=10 * 1024 * 1024,  # 10MB
+            backupCount=10,
+            encoding='utf-8'
+        )
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(file_formatter)
+        root_logger.addHandler(error_handler)
     
     # Configure structlog for structured logging
     structlog.configure(

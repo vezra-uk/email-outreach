@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
+import { Dialog } from '../../components/ui/dialog';
 import { Plus, Filter, Upload, Download, Settings } from 'lucide-react';
 import CSVUpload from '../../components/CSVUpload';
 import LeadForm from '../../components/forms/LeadForm';
@@ -147,6 +148,15 @@ function Leads() {
     return <div className="p-8 text-red-600">Error: {error}</div>;
   }
 
+  // Filter leads based on selected criteria
+  const filteredLeads = leads.filter(lead => {
+    const matchesIndustry = !selectedIndustry || lead.industry === selectedIndustry;
+    const matchesCompany = !searchCompany || 
+      (lead.company && lead.company.toLowerCase().includes(searchCompany.toLowerCase()));
+    
+    return matchesIndustry && matchesCompany;
+  });
+
   return (
     <div className="p-8">
       <div className="mb-8">
@@ -217,24 +227,26 @@ function Leads() {
         </Card>
       )}
 
-      {showEditForm && editingLead && (
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle>Edit Lead</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <LeadForm
-              lead={editingLead}
-              onSubmit={handleUpdateLead}
-              onCancel={() => {
-                setShowEditForm(false);
-                setEditingLead(null);
-              }}
-              isLoading={isSubmitting}
-            />
-          </CardContent>
-        </Card>
-      )}
+      <Dialog
+        isOpen={showEditForm}
+        onClose={() => {
+          setShowEditForm(false);
+          setEditingLead(null);
+        }}
+        title="Edit Lead"
+      >
+        {editingLead && (
+          <LeadForm
+            lead={editingLead}
+            onSubmit={handleUpdateLead}
+            onCancel={() => {
+              setShowEditForm(false);
+              setEditingLead(null);
+            }}
+            isLoading={isSubmitting}
+          />
+        )}
+      </Dialog>
 
       {showBulkForm && (
         <Card className="mb-6">
@@ -271,11 +283,11 @@ function Leads() {
       {/* Leads Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Leads ({leads.length})</CardTitle>
+          <CardTitle>Leads ({filteredLeads.length})</CardTitle>
         </CardHeader>
         <CardContent>
           <LeadsTable
-            leads={leads}
+            leads={filteredLeads}
             onEdit={handleEditLead}
             onDelete={handleDeleteLead}
           />

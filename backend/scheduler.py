@@ -1,7 +1,9 @@
 # backend/scheduler.py
+import os
+os.environ["DISABLE_FILE_LOGGING"] = "1"
+
 import schedule
 import time
-import os
 from datetime import date
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -35,69 +37,54 @@ class EmailScheduler:
             }, exc_info=True)
             raise
     
-    def send_daily_batch(self):
-        """Send daily batch of emails"""
-        logger.info("Starting daily email batch job")
-        
-        db = self.SessionLocal()
-        
-        try:
-            today = date.today()
-            daily_stats = db.query(DailyStats).filter(DailyStats.date == today).first()
-            
-            if not daily_stats:
-                daily_stats = DailyStats(date=today, emails_sent=0)
-                db.add(daily_stats)
-                db.commit()
-                logger.info("Created new daily stats record", extra={"date": today.isoformat()})
-            
-            logger.info("Daily batch processing started", extra={
-                "date": today.isoformat(),
-                "emails_already_sent": daily_stats.emails_sent,
-                "daily_limit": self.daily_limit,
-                "remaining_quota": self.daily_limit - daily_stats.emails_sent
-            })
-            
-            if daily_stats.emails_sent >= self.daily_limit:
-                print(f"Daily limit of {self.daily_limit} emails already reached")
-                return
-            
-            remaining = self.daily_limit - daily_stats.emails_sent
-            
-            # Note: Campaign functionality removed - all emails now sent via sequences
-            print("All email sending now handled by sequence batch processing")
-            
-        finally:
-            db.close()
     
     def send_sequence_emails(self):
         """Send sequence emails that are due"""
+        logger.info("Starting sequence email batch job")
+        
         try:
-            print("Checking for sequence emails to send...")
             send_sequence_batch()
-            print("Sequence email batch completed")
+            logger.info("Sequence email batch completed successfully")
         except Exception as e:
-            print(f"Error in sequence email batch: {e}")
+            logger.error("Failed to process sequence email batch", extra={
+                "error": str(e),
+                "error_type": type(e).__name__
+            }, exc_info=True)
+            raise
     
     def start_scheduler(self):
         """Start the email scheduler"""
-        print("Starting email scheduler...")
-        
-        # Schedule daily campaign sends at 9 AM
-        schedule.every().day.at("09:00").do(self.send_daily_batch)
+        logger.info("Starting email scheduler")
         
         # Schedule sequence emails every 5 minutes
         schedule.every(5).minutes.do(self.send_sequence_emails)
         
-        # For testing - also allow manual trigger every minute
-        # schedule.every(1).minutes.do(self.send_daily_batch)
-        # schedule.every(1).minutes.do(self.send_sequence_emails)
+        logger.info("Email scheduler configured", extra={
+            "sequence_interval_minutes": 5,
+            "sleep_interval_seconds": 60
+        })
         
-        while True:
-            schedule.run_pending()
-            time.sleep(60)
+        try:
+            while True:
+                schedule.run_pending()
+                time.sleep(60)
+        except KeyboardInterrupt:
+            logger.info("Email scheduler stopped by user")
+        except Exception as e:
+            logger.error("Email scheduler crashed", extra={
+                "error": str(e),
+                "error_type": type(e).__name__
+            }, exc_info=True)
+            raise
 
 if __name__ == "__main__":
-    from datetime import datetime
-    scheduler = EmailScheduler()
-    scheduler.start_scheduler()
+    try:
+        logger.info("Email scheduler starting up")
+        scheduler = EmailScheduler()
+        scheduler.start_scheduler()
+    except Exception as e:
+        logger.error("Failed to start email scheduler", extra={
+            "error": str(e),
+            "error_type": type(e).__name__
+        }, exc_info=True)
+        raise

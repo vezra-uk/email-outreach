@@ -11,7 +11,7 @@ from dependencies import get_current_active_user
 router = APIRouter(prefix="/leads", tags=["leads"])
 
 @router.get("", response_model=List[LeadResponse])
-def get_leads(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+def get_leads(skip: int = 0, limit: int = 10000, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     leads = db.query(Lead).offset(skip).limit(limit).all()
     return leads
 
@@ -28,7 +28,7 @@ def filter_leads(
     industry: Optional[str] = None,
     company: Optional[str] = None,
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 10000,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
@@ -49,7 +49,7 @@ def get_leads_who_opened_emails(
     campaign_id: Optional[int] = None,
     days: Optional[int] = 30,
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 10000,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):

@@ -22,17 +22,18 @@ class TrackingSignal:
 
 class ModernOpenTracker:
     
-    # Known email client prefetch patterns
-    PREFETCH_USER_AGENTS = [
-        'AppleWebKit/605.1.15',  # Apple Mail Privacy Protection
-        'Mozilla/5.0 (iPhone; CPU iPhone OS',  # iOS Mail app prefetch
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X',  # macOS Mail prefetch
-        'outlook',  # Outlook prefetch
-        'MailKit',  # Various mail clients
+    # Known problematic patterns (only very specific scanner indicators)
+    SCANNER_PATTERNS = [
+        'googleimageproxy',
+        'ggpht.com', 
+        'mailscanner',
+        'emailscanner',
+        'Microsoft Office Excel',  # Outlook security scanning
+        'Microsoft Office Outlook',  # Outlook security scanning (but allow normal Outlook)
     ]
     
-    # Suspicious timing patterns (too fast = prefetch)
-    SUSPICIOUS_TIMING_THRESHOLD = 2  # seconds
+    # Scanner detection threshold (scanners hit quickly after send)
+    SCANNER_TIMING_THRESHOLD = 600  # 10 minutes
     
     def __init__(self):
         self.tracking_signals = {}
@@ -81,16 +82,16 @@ class ModernOpenTracker:
         }
     
     def analyze_user_agent(self, user_agent: str) -> Tuple[bool, float]:
-        """Analyze user agent to detect prefetch behavior"""
+        """Analyze user agent to detect scanner/prefetch behavior"""
         if not user_agent:
             return True, 0.3  # Suspicious but possible
         
         user_agent_lower = user_agent.lower()
         
-        # Check for known prefetch patterns
-        for prefetch_pattern in self.PREFETCH_USER_AGENTS:
-            if prefetch_pattern.lower() in user_agent_lower:
-                return True, 0.1  # Likely prefetch
+        # Email scanners and proxies (major penalty)
+        for pattern in self.SCANNER_PATTERNS:
+            if pattern.lower() in user_agent_lower:
+                return True, 0.05  # Very likely scanner
         
         # Check for automation indicators
         automation_indicators = ['bot', 'crawler', 'spider', 'automated', 'headless']
@@ -98,31 +99,37 @@ class ModernOpenTracker:
             if indicator in user_agent_lower:
                 return True, 0.0  # Definitely automated
         
-        # Real user patterns
-        real_user_indicators = ['chrome', 'firefox', 'safari', 'edge', 'opera']
+        # Email clients (good indicators)
+        email_client_indicators = ['thunderbird', 'outlook', 'apple mail']
+        for indicator in email_client_indicators:
+            if indicator in user_agent_lower:
+                return False, 0.9  # Likely real user
+        
+        # Real user patterns (browsers and webmail)
+        real_user_indicators = ['chrome', 'firefox', 'safari', 'edge', 'opera', 'mozilla']
         for indicator in real_user_indicators:
             if indicator in user_agent_lower:
-                return False, 0.8  # Likely real user
+                return False, 0.7  # Likely real user (including webmail)
         
         return False, 0.5  # Unknown but assume real
     
     def analyze_timing(self, send_time: datetime, open_time: datetime) -> Tuple[bool, float]:
-        """Analyze timing patterns to detect prefetch vs real opens"""
+        """Analyze time-since-send to detect scanner vs human behavior"""
         time_diff = (open_time - send_time).total_seconds()
         
-        # Too fast = likely prefetch
-        if time_diff < self.SUSPICIOUS_TIMING_THRESHOLD:
-            return True, 0.1
+        # Scanners typically hit within minutes of sending
+        if time_diff < 600:  # Less than 10 minutes
+            return True, 0.1  # Likely scanner
         
-        # Very fast but not impossible
-        if time_diff < 10:
-            return False, 0.4
+        # Quick but plausible human response (10 min - 1 hour)
+        if time_diff < 3600:
+            return False, 0.6  # Moderate confidence
         
-        # Normal human timing
-        if time_diff < 3600:  # Within an hour
-            return False, 0.9
+        # Normal human timing (1-4 hours)
+        if time_diff < 14400:
+            return False, 0.9  # High confidence
         
-        # Delayed but still valid
+        # Delayed opens (4+ hours) - still human but lower engagement
         return False, 0.7
     
     def calculate_confidence_score(self, signals: List[TrackingSignal], 

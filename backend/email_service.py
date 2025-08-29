@@ -15,6 +15,7 @@ import time
 import requests
 from typing import Dict, Optional, Tuple
 from datetime import datetime
+import pytz
 
 from logger_config import get_logger
 from modern_tracking_service import modern_tracker
@@ -300,6 +301,50 @@ Content-Type: text/plain; charset=UTF-8
             })
             return False, 0.0, f"Rspamd check failed: {e}"
 
+    def _is_within_schedule(self, sending_profile) -> Tuple[bool, str]:
+        """Check if current time is within sending profile schedule"""
+        if not sending_profile or not sending_profile.schedule_enabled:
+            return True, "Scheduling disabled"
+            
+        try:
+            # Get timezone for the profile
+            profile_tz = pytz.timezone(sending_profile.schedule_timezone or 'UTC')
+            current_time = datetime.now(profile_tz)
+            
+            # Check day of week (1=Monday, 7=Sunday)
+            current_weekday = current_time.isoweekday()
+            allowed_days = [int(d.strip()) for d in sending_profile.schedule_days.split(',') if d.strip()]
+            
+            if current_weekday not in allowed_days:
+                return False, f"Current day ({current_weekday}) not in allowed days ({allowed_days})"
+            
+            # Check time range
+            current_time_only = current_time.time()
+            time_from = sending_profile.schedule_time_from
+            time_to = sending_profile.schedule_time_to
+            
+            if time_from <= time_to:
+                # Same day range (e.g., 9:00 - 17:00)
+                if not (time_from <= current_time_only <= time_to):
+                    return False, f"Current time ({current_time_only}) not in allowed range ({time_from} - {time_to})"
+            else:
+                # Overnight range (e.g., 22:00 - 06:00)
+                if not (current_time_only >= time_from or current_time_only <= time_to):
+                    return False, f"Current time ({current_time_only}) not in allowed overnight range ({time_from} - {time_to})"
+            
+            logger.info(f"SCHEDULE_CHECK_PASSED: Email sending allowed at {current_time} in {sending_profile.schedule_timezone}")
+            return True, f"Within schedule: {current_time} in {sending_profile.schedule_timezone}"
+            
+        except Exception as e:
+            logger.error("Schedule check failed, allowing send", extra={
+                "error": str(e), "error_type": type(e).__name__
+            })
+            return True, f"Schedule check failed, allowing send: {e}"
+
+    def is_sending_allowed(self, sending_profile) -> Tuple[bool, str]:
+        """Public method to check if email sending is currently allowed based on schedule"""
+        return self._is_within_schedule(sending_profile)
+
     def _create_and_send_email(self, lead, subject: str, content: str, tracking_id: str, sending_profile=None):
         """Create email with tracking and send via Gmail"""
         if not self.gmail_service:
@@ -316,14 +361,8 @@ Content-Type: text/plain; charset=UTF-8
             sender_company = sending_profile.sender_company if sending_profile else os.getenv('SENDER_COMPANY', 'Growth Solutions Inc.')
             sender_email = sending_profile.sender_email if sending_profile else os.getenv('SENDER_EMAIL', 'alex@growthsolutions.com')
             
-            # Add minimal tracking via logo in signature + CSS background backup
+            # Add unsubscribe link only (signature already included by AI)
             content_with_tracking = content + f"""
-
-Best regards,
-{sender_name}
-{sender_title}
-{sender_company}
-{sender_email}
 
 Unsubscribe: https://click.wegetyouonline.co.uk/api/unsubscribe/{tracking_id}"""
 
@@ -369,11 +408,6 @@ Unsubscribe: https://click.wegetyouonline.co.uk/api/unsubscribe/{tracking_id}"""
     {content.replace(chr(10), '<br>')}
     
     <div class="signature">
-        <br>Best regards,<br>
-        <strong>{sender_name}</strong><br>
-        {sender_title}<br>
-        {sender_company}<br>
-        {sender_email}<br><br>
         
         <img src="https://click.wegetyouonline.co.uk/api/logo.png?t={tracking_id}" alt="{sender_company}" class="logo"><br><br>
         
@@ -407,73 +441,29 @@ Unsubscribe: https://click.wegetyouonline.co.uk/api/unsubscribe/{tracking_id}"""
             }, exc_info=True)
             return False
 
-    def send_primary(self, lead, prompt_text: str, tracking_id: str, sending_profile=None):
+        
+    def send_email(self, lead, prompt_text: str, tracking_id: str, sending_profile=None, previous_emails=None):
         """
-        Send primary outreach email with OpenAI generation and SpamAssassin checking
-        
-        Args:
-            lead: Lead object with email, name, company etc.
-            prompt_text: Instructions for AI email generation
-            tracking_id: Unique tracking ID for this email
-            sending_profile: Optional sending profile for sender details
-            
-        Returns:
-            bool: True if sent successfully, False otherwise
-        """
-        logger.info("EMAIL_SEND_PRIMARY: Sending primary email", extra={
-            "lead_email": lead.email,
-            "tracking_id": tracking_id,
-            "has_sending_profile": bool(sending_profile)
-        })
-        
-        # Generate email with AI and spam checking
-        email_data = self._generate_ai_email(lead, prompt_text, sending_profile, is_followup=False)
-        
-        if not email_data:
-            logger.error("Failed to generate primary email")
-            return False
-            
-        # Send the email  
-        success = self._create_and_send_email(
-            lead=lead,
-            subject=email_data['subject'],
-            content=email_data['content'], 
-            tracking_id=tracking_id,
-            sending_profile=sending_profile
-        )
-        
-        if success:
-            logger.info(f"EMAIL_SEND_SUCCESS: Primary email sent to {lead.email} (Spam Score: {email_data.get('spam_score', 'N/A')})", extra={
-                "lead_email": lead.email,
-                "spam_score": email_data.get('spam_score', 'N/A')
-            })
-        else:
-            logger.error("EMAIL_SEND_FAILED: Primary email send failed")
-            
-        return success
-        
-    def send_followup(self, lead, prompt_text: str, tracking_id: str, sending_profile=None, previous_emails=None):
-        """
-        Send follow-up email with context from previous emails
+        Send email with optional context from previous emails
         
         Args:
             lead: Lead object with email, name, company etc.
             prompt_text: Instructions for AI email generation  
             tracking_id: Unique tracking ID for this email
             sending_profile: Optional sending profile for sender details
-            previous_emails: List of previous emails for context
+            previous_emails: List of previous emails for context (optional)
             
         Returns:
-            bool: True if sent successfully, False otherwise
+            bool: True if sent successfully, False if failed or outside schedule
         """
-        logger.info("EMAIL_SEND_FOLLOWUP: Sending follow-up email", extra={
+        logger.info("EMAIL_SEND: Attempting to send email", extra={
             "lead_email": lead.email,
             "tracking_id": tracking_id,
             "has_sending_profile": bool(sending_profile),
             "previous_emails_count": len(previous_emails) if previous_emails else 0
         })
         
-        # Generate follow-up email with context
+        # Generate email with context
         email_data = self._generate_ai_email(
             lead=lead,
             prompt_text=prompt_text, 
@@ -483,7 +473,7 @@ Unsubscribe: https://click.wegetyouonline.co.uk/api/unsubscribe/{tracking_id}"""
         )
         
         if not email_data:
-            logger.error("Failed to generate follow-up email")
+            logger.error("Failed to generate email")
             return False
             
         # Send the email
@@ -496,11 +486,11 @@ Unsubscribe: https://click.wegetyouonline.co.uk/api/unsubscribe/{tracking_id}"""
         )
         
         if success:
-            logger.info(f"EMAIL_SEND_SUCCESS: Follow-up email sent to {lead.email} (Spam Score: {email_data.get('spam_score', 'N/A')})", extra={
+            logger.info(f"EMAIL_SEND_SUCCESS: Email sent to {lead.email} (Spam Score: {email_data.get('spam_score', 'N/A')})", extra={
                 "lead_email": lead.email,
                 "spam_score": email_data.get('spam_score', 'N/A')
             })
         else:
-            logger.error("EMAIL_SEND_FAILED: Follow-up email send failed")
+            logger.error("EMAIL_SEND_FAILED: Email send failed")
             
         return success

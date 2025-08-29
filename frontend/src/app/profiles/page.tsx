@@ -17,6 +17,12 @@ interface SendingProfile {
   sender_website?: string
   signature?: string
   is_default: boolean
+  // Scheduling fields
+  schedule_enabled: boolean
+  schedule_days: string
+  schedule_time_from: string
+  schedule_time_to: string
+  schedule_timezone: string
 }
 
 function SendingProfiles() {
@@ -33,7 +39,13 @@ function SendingProfiles() {
     sender_phone: '',
     sender_website: '',
     signature: '',
-    is_default: false
+    is_default: false,
+    // Scheduling fields
+    schedule_enabled: true,
+    schedule_days: '1,2,3,4,5', // Mon-Fri by default
+    schedule_time_from: '09:00',
+    schedule_time_to: '17:00',
+    schedule_timezone: 'UTC'
   })
 
   useEffect(() => {
@@ -97,7 +109,13 @@ function SendingProfiles() {
       sender_phone: profile.sender_phone || '',
       sender_website: profile.sender_website || '',
       signature: profile.signature || '',
-      is_default: profile.is_default
+      is_default: profile.is_default,
+      // Scheduling fields
+      schedule_enabled: profile.schedule_enabled,
+      schedule_days: profile.schedule_days,
+      schedule_time_from: profile.schedule_time_from,
+      schedule_time_to: profile.schedule_time_to,
+      schedule_timezone: profile.schedule_timezone
     })
     setShowForm(true)
   }
@@ -112,7 +130,13 @@ function SendingProfiles() {
       sender_phone: '',
       sender_website: '',
       signature: '',
-      is_default: false
+      is_default: false,
+      // Scheduling fields
+      schedule_enabled: true,
+      schedule_days: '1,2,3,4,5', // Mon-Fri by default
+      schedule_time_from: '09:00',
+      schedule_time_to: '17:00',
+      schedule_timezone: 'UTC'
     })
   }
 
@@ -255,6 +279,121 @@ function SendingProfiles() {
                     />
                   </div>
 
+                  {/* Email Schedule Section */}
+                  <div className="md:col-span-2 border-t pt-6 mt-6">
+                    <h3 className="text-lg font-medium text-gray-900 mb-4">Email Schedule</h3>
+                    
+                    <div className="flex items-center mb-4">
+                      <input
+                        type="checkbox"
+                        id="schedule_enabled"
+                        checked={formData.schedule_enabled}
+                        onChange={(e) => setFormData(prev => ({ ...prev, schedule_enabled: e.target.checked }))}
+                        className="mr-2"
+                      />
+                      <label htmlFor="schedule_enabled" className="text-sm font-medium text-gray-700">
+                        Enable email scheduling
+                      </label>
+                    </div>
+                    
+                    {formData.schedule_enabled && (
+                      <div className="space-y-4 ml-6">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Days of the week
+                          </label>
+                          <div className="flex flex-wrap gap-2">
+                            {[
+                              { value: '1', label: 'Mon' },
+                              { value: '2', label: 'Tue' },
+                              { value: '3', label: 'Wed' },
+                              { value: '4', label: 'Thu' },
+                              { value: '5', label: 'Fri' },
+                              { value: '6', label: 'Sat' },
+                              { value: '7', label: 'Sun' }
+                            ].map((day) => {
+                              const selectedDays = formData.schedule_days.split(',')
+                              const isSelected = selectedDays.includes(day.value)
+                              
+                              return (
+                                <button
+                                  key={day.value}
+                                  type="button"
+                                  className={`px-3 py-1 text-sm rounded-md border ${
+                                    isSelected 
+                                      ? 'bg-blue-500 text-white border-blue-500' 
+                                      : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                                  }`}
+                                  onClick={() => {
+                                    const currentDays = formData.schedule_days.split(',').filter(d => d)
+                                    if (isSelected) {
+                                      const newDays = currentDays.filter(d => d !== day.value)
+                                      setFormData(prev => ({ ...prev, schedule_days: newDays.join(',') }))
+                                    } else {
+                                      setFormData(prev => ({ ...prev, schedule_days: [...currentDays, day.value].sort().join(',') }))
+                                    }
+                                  }}
+                                >
+                                  {day.label}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              From time
+                            </label>
+                            <input
+                              type="time"
+                              value={formData.schedule_time_from}
+                              onChange={(e) => setFormData(prev => ({ ...prev, schedule_time_from: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              To time
+                            </label>
+                            <input
+                              type="time"
+                              value={formData.schedule_time_to}
+                              onChange={(e) => setFormData(prev => ({ ...prev, schedule_time_to: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Timezone
+                            </label>
+                            <select
+                              value={formData.schedule_timezone}
+                              onChange={(e) => setFormData(prev => ({ ...prev, schedule_timezone: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="UTC">UTC</option>
+                              <option value="America/New_York">Eastern Time</option>
+                              <option value="America/Chicago">Central Time</option>
+                              <option value="America/Denver">Mountain Time</option>
+                              <option value="America/Los_Angeles">Pacific Time</option>
+                              <option value="Europe/London">London</option>
+                              <option value="Europe/Paris">Paris</option>
+                              <option value="Europe/Berlin">Berlin</option>
+                              <option value="Asia/Tokyo">Tokyo</option>
+                              <option value="Asia/Shanghai">Shanghai</option>
+                              <option value="Asia/Dubai">Dubai</option>
+                              <option value="Australia/Sydney">Sydney</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="md:col-span-2">
                     <div className="flex items-center">
                       <input
@@ -328,6 +467,25 @@ function SendingProfiles() {
                           </pre>
                         </div>
                       )}
+                      
+                      {/* Schedule Information */}
+                      <div className="mt-3 pt-3 border-t border-gray-200">
+                        <strong>Email Schedule:</strong>
+                        {profile.schedule_enabled ? (
+                          <div className="text-xs text-gray-500 mt-1">
+                            <div>
+                              Days: {profile.schedule_days.split(',').map(d => {
+                                const dayNames = { '1': 'Mon', '2': 'Tue', '3': 'Wed', '4': 'Thu', '5': 'Fri', '6': 'Sat', '7': 'Sun' }
+                                return dayNames[d as keyof typeof dayNames] || d
+                              }).join(', ')}
+                            </div>
+                            <div>Time: {profile.schedule_time_from} - {profile.schedule_time_to}</div>
+                            <div>Timezone: {profile.schedule_timezone}</div>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-500 ml-1">Disabled</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   

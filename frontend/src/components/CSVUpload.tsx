@@ -1,9 +1,10 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
 import { Button } from './ui/button'
-import { Upload, Download, FileText, CheckCircle, AlertCircle, X } from 'lucide-react'
+import { Upload, Download, FileText, CheckCircle, AlertCircle, X, Plus } from 'lucide-react'
 import { apiClient } from '@/utils/api'
+import { LeadGroup } from '@/types'
 
 interface CSVUploadProps {
   onUploadComplete: () => void
@@ -45,6 +46,25 @@ export default function CSVUpload({ onUploadComplete, onClose }: CSVUploadProps)
   const [isProcessing, setIsProcessing] = useState(false)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
   const [step, setStep] = useState<'upload' | 'mapping' | 'result'>('upload')
+  
+  // Group selection state
+  const [groups, setGroups] = useState<LeadGroup[]>([])
+  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [groupSelection, setGroupSelection] = useState<'none' | 'existing' | 'new'>('none')
+
+  // Fetch groups on component mount
+  useEffect(() => {
+    const fetchGroups = async () => {
+      try {
+        const groupData = await apiClient.getJson<LeadGroup[]>('/api/groups/')
+        setGroups(groupData)
+      } catch (error) {
+        console.error('Failed to fetch groups:', error)
+      }
+    }
+    fetchGroups()
+  }, [])
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -102,11 +122,20 @@ export default function CSVUpload({ onUploadComplete, onClose }: CSVUploadProps)
 
     setIsProcessing(true)
     try {
-      const result = await apiClient.postJson<UploadResult>('/api/leads/csv/upload', {
+      const uploadData: any = {
         csv_content: csvContent,
         column_mapping: columnMapping,
         has_header: hasHeader
-      })
+      }
+
+      // Add group data based on selection
+      if (groupSelection === 'existing' && selectedGroupId) {
+        uploadData.group_id = selectedGroupId
+      } else if (groupSelection === 'new' && newGroupName.trim()) {
+        uploadData.new_group_name = newGroupName.trim()
+      }
+
+      const result = await apiClient.postJson<UploadResult>('/api/leads/csv/upload', uploadData)
       setUploadResult(result)
       setStep('result')
       if (result.created > 0) {
@@ -145,6 +174,9 @@ export default function CSVUpload({ onUploadComplete, onClose }: CSVUploadProps)
     setColumnMapping({})
     setUploadResult(null)
     setStep('upload')
+    setSelectedGroupId(null)
+    setNewGroupName('')
+    setGroupSelection('none')
   }
 
   return (
@@ -279,6 +311,79 @@ export default function CSVUpload({ onUploadComplete, onClose }: CSVUploadProps)
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            {/* Group Assignment */}
+            <div>
+              <h3 className="font-medium mb-4">Assign to Group (Optional)</h3>
+              <div className="space-y-4">
+                <div className="flex gap-4">
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="groupSelection"
+                      value="none"
+                      checked={groupSelection === 'none'}
+                      onChange={() => setGroupSelection('none')}
+                      className="text-blue-600"
+                    />
+                    <span>No group assignment</span>
+                  </label>
+                  
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="groupSelection"
+                      value="existing"
+                      checked={groupSelection === 'existing'}
+                      onChange={() => setGroupSelection('existing')}
+                      className="text-blue-600"
+                    />
+                    <span>Assign to existing group</span>
+                  </label>
+                  
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="groupSelection"
+                      value="new"
+                      checked={groupSelection === 'new'}
+                      onChange={() => setGroupSelection('new')}
+                      className="text-blue-600"
+                    />
+                    <span>Create new group</span>
+                  </label>
+                </div>
+
+                {groupSelection === 'existing' && (
+                  <div>
+                    <select
+                      value={selectedGroupId || ''}
+                      onChange={(e) => setSelectedGroupId(e.target.value ? parseInt(e.target.value) : null)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Select a group</option>
+                      {groups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.name} ({group.lead_count} leads)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {groupSelection === 'new' && (
+                  <div>
+                    <input
+                      type="text"
+                      value={newGroupName}
+                      onChange={(e) => setNewGroupName(e.target.value)}
+                      placeholder="Enter new group name"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                )}
               </div>
             </div>
 
