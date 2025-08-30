@@ -214,9 +214,18 @@ def serve_logo_with_tracking(
                 if analysis['is_opened'] and campaign_email.opens == 0:
                     campaign_email.opens = 1
                     
-                    # Update campaign stats
-                    if campaign_email.campaign:
-                        campaign_email.campaign.email_opens += 1
+                    # Update campaign stats - get campaign through lead_sequence
+                    lead_sequence = db.query(LeadCampaign).filter(
+                        LeadCampaign.id == campaign_email.lead_sequence_id
+                    ).first()
+                    
+                    if lead_sequence:
+                        campaign = db.query(Campaign).filter(
+                            Campaign.id == lead_sequence.sequence_id
+                        ).first()
+                        
+                        if campaign:
+                            campaign.email_opens = (campaign.email_opens or 0) + 1
                     
                     db.commit()
                     

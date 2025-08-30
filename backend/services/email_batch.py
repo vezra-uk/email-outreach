@@ -11,6 +11,9 @@ from models import (
     LeadCampaign, CampaignStep, CampaignEmail, EmailReply,
     SendingProfile
 )
+from logger_config import get_logger
+
+logger = get_logger(__name__)
 
 def send_campaign_batch():
     """Send campaign emails using the same generation method as preview"""
@@ -44,7 +47,7 @@ def send_sequence_batch():
         remaining_quota = daily_limit - daily_stats.emails_sent
         
         if remaining_quota <= 0:
-            print(f"Daily limit of {daily_limit} emails already reached ({daily_stats.emails_sent} sent)")
+            logger.info(f"Daily limit of {daily_limit} emails already reached ({daily_stats.emails_sent} sent)")
             return {"emails_sent": 0, "sequences_processed": 0, "errors": ["Daily limit reached"]}
         
         now = datetime.utcnow()
@@ -55,19 +58,24 @@ def send_sequence_batch():
         
         sequences_processed = len(due_sequences)
         
+        # Log status even when no emails are due
+        if sequences_processed == 0:
+            logger.info(f"No emails scheduled to send right now. Daily quota: {daily_stats.emails_sent}/{daily_limit}")
+            return {"emails_sent": 0, "sequences_processed": 0, "errors": []}
+        
         # Limit to smaller batches to mimic human sending patterns (max 10 per batch)
         max_batch_size = min(10, remaining_quota)
         if len(due_sequences) > max_batch_size:
             due_sequences = due_sequences[:max_batch_size]
             sequences_processed = len(due_sequences)
-            print(f"Limiting batch to {max_batch_size} emails to mimic human sending patterns")
+            logger.info(f"Limiting batch to {max_batch_size} emails to mimic human sending patterns")
         
         # Sequences are already ordered by next_send_at (oldest first) to prioritize overdue emails
-        print(f"Processing {len(due_sequences)} emails in chronological order (oldest first)")
+        logger.info(f"Processing {len(due_sequences)} emails in chronological order (oldest first)")
         
         # Add a small initial random delay to spread out batch processing
         initial_delay = random.randint(5, 60)
-        print(f"Starting email batch with {initial_delay} second initial delay...")
+        logger.info(f"Starting email batch with {initial_delay} second initial delay...")
         time.sleep(initial_delay)
         
         for i, lead_seq in enumerate(due_sequences):
@@ -97,7 +105,11 @@ def send_sequence_batch():
                 # Check if sending is allowed based on schedule (skip this email if not)
                 is_allowed, schedule_reason = email_service.is_sending_allowed(sending_profile)
                 if not is_allowed:
-                    print(f"Skipping email for lead {lead_seq.lead_id}: {schedule_reason}")
+                    logger.info(f"Skipping email for lead {lead_seq.lead_id}: {schedule_reason}", extra={
+                        "lead_id": lead_seq.lead_id,
+                        "sequence_id": lead_seq.sequence_id,
+                        "schedule_reason": schedule_reason
+                    })
                     continue
                 
                 reply_check = db.query(EmailReply).filter(
@@ -206,7 +218,7 @@ def send_sequence_batch():
                         delay_seconds = max(15, base_delay + variation)  # Minimum 15 seconds
                         delay_seconds = min(delay_seconds, 400)  # Maximum ~6.5 minutes
                         
-                        print(f"Email {i+1}/{len(due_sequences)} sent. Waiting {delay_seconds} seconds before next email...")
+                        logger.info(f"Email {i+1}/{len(due_sequences)} sent. Waiting {delay_seconds} seconds before next email...")
                         time.sleep(delay_seconds)
                     
                 else:
@@ -215,14 +227,22 @@ def send_sequence_batch():
                     
             except Exception as e:
                 error_msg = f"Failed to send sequence email for lead {lead_seq.lead_id}: {e}"
-                print(error_msg)
+                logger.error(error_msg, extra={
+                    "lead_id": lead_seq.lead_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__
+                }, exc_info=True)
                 errors.append(error_msg)
         
         db.commit()
         
-        print(f"Batch completed: {emails_sent} emails sent, {sequences_processed} sequences processed")
+        logger.info(f"Batch completed: {emails_sent} emails sent, {sequences_processed} sequences processed", extra={
+            "emails_sent": emails_sent,
+            "sequences_processed": sequences_processed,
+            "daily_quota_used": f"{daily_stats.emails_sent}/{daily_limit}"
+        })
         if emails_sent > 0:
-            print(f"Daily stats: {daily_stats.emails_sent}/{daily_limit} emails sent today")
+            logger.info(f"Daily stats: {daily_stats.emails_sent}/{daily_limit} emails sent today")
         
         return {
             "emails_sent": emails_sent,

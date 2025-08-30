@@ -10,6 +10,7 @@ class Campaign(Base):
     description = Column(Text)
     sending_profile_id = Column(Integer, ForeignKey("sending_profiles.id"))
     status = Column(String, default="active")
+    email_opens = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
 

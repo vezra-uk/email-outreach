@@ -1,6 +1,6 @@
 # backend/scheduler.py
 import os
-os.environ["DISABLE_FILE_LOGGING"] = "1"
+# os.environ["DISABLE_FILE_LOGGING"] = "1"  # Commented out to enable file logging
 
 import schedule
 import time
