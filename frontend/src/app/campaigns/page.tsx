@@ -3,60 +3,38 @@
 import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Pagination } from '@/components/ui/pagination';
 import Link from 'next/link';
 import { withAuth } from '../../contexts/AuthContext';
 import { apiClient } from '@/utils/api';
+import { usePagination } from '@/hooks/usePagination';
+import { CampaignWithProgress, PaginatedResponse } from '@/types';
 
-interface Campaign {
-  id: number;
-  name: string;
-  description?: string;
-  status: string;
-  created_at: string;
-}
-
-interface CampaignProgress {
-  total_leads: number;
-  active_leads: number;
-  completed_leads: number;
-  stopped_leads: number;
-  replied_leads: number;
-  avg_step: number;
-}
 
 function SequencesPage() {
-  const [campaigns, setSequences] = useState<Campaign[]>([]);
-  const [progress, setProgress] = useState<Record<number, CampaignProgress>>({});
+  const [campaigns, setCampaigns] = useState<CampaignWithProgress[]>([]);
+  const [paginatedData, setPaginatedData] = useState<PaginatedResponse<CampaignWithProgress> | null>(null);
   const [loading, setLoading] = useState(true);
+  const { pagination, goToPage, getQueryParams } = usePagination({ initialPerPage: 12 });
 
   useEffect(() => {
-    fetchSequences();
-  }, []);
+    fetchCampaigns();
+  }, [pagination.page, pagination.per_page]);
 
-  const fetchSequences = async () => {
+  const fetchCampaigns = async () => {
     try {
-      const data = await apiClient.getJson<Campaign[]>('/api/campaigns');
-      setSequences(data);
-
-      // Fetch progress for each campaign
-      const progressPromises = data.map(async (seq: Campaign) => {
-        try {
-          const progressData = await apiClient.getJson<CampaignProgress>(`/api/campaigns/${seq.id}/progress`);
-          return { id: seq.id, progress: progressData };
-        } catch (error) {
-          console.error(`Error fetching progress for campaign ${seq.id}:`, error);
-          return { id: seq.id, progress: { total_leads: 0, active_leads: 0, completed_leads: 0, stopped_leads: 0, replied_leads: 0, avg_step: 0 } };
-        }
-      });
-
-      const progressResults = await Promise.all(progressPromises);
-      const progressMap: Record<number, CampaignProgress> = {};
-      progressResults.forEach(({ id, progress }) => {
-        progressMap[id] = progress;
-      });
-      setProgress(progressMap);
+      setLoading(true);
+      const queryParams = getQueryParams();
+      const data = await apiClient.getJson<PaginatedResponse<CampaignWithProgress>>(
+        `/api/campaigns/paginated?${queryParams}`
+      );
+      
+      setPaginatedData(data);
+      setCampaigns(data.items);
     } catch (error) {
       console.error('Error fetching campaigns:', error);
+      setCampaigns([]);
+      setPaginatedData(null);
     } finally {
       setLoading(false);
     }
@@ -72,12 +50,40 @@ function SequencesPage() {
     }
   };
 
+  const pauseCampaign = async (campaignId: number, campaignName: string) => {
+    if (confirm(`Pause campaign "${campaignName}"? No emails will be sent while paused.`)) {
+      try {
+        await apiClient.post(`/api/campaigns/${campaignId}/pause`);
+        alert('Campaign paused successfully!');
+        fetchCampaigns(); // Refresh the list
+      } catch (error) {
+        console.error('Error pausing campaign:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to pause campaign';
+        alert(`Failed to pause campaign: ${errorMessage}`);
+      }
+    }
+  };
+
+  const unpauseCampaign = async (campaignId: number, campaignName: string) => {
+    if (confirm(`Resume campaign "${campaignName}"? Email sending will continue.`)) {
+      try {
+        await apiClient.post(`/api/campaigns/${campaignId}/unpause`);
+        alert('Campaign resumed successfully!');
+        fetchCampaigns(); // Refresh the list
+      } catch (error) {
+        console.error('Error resuming campaign:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to resume campaign';
+        alert(`Failed to resume campaign: ${errorMessage}`);
+      }
+    }
+  };
+
   const deleteSequence = async (campaignId: number, campaignName: string) => {
     if (confirm(`Are you sure you want to delete the campaign "${campaignName}"? This cannot be undone.`)) {
       try {
         await apiClient.delete(`/api/campaigns/${campaignId}`);
         alert('Sequence deleted successfully!');
-        fetchSequences(); // Refresh the list
+        fetchCampaigns(); // Refresh the list
       } catch (error) {
         console.error('Error deleting campaign:', error);
         const errorMessage = error instanceof Error ? error.message : 'Failed to delete campaign';
@@ -123,47 +129,67 @@ function SequencesPage() {
                     <p className="text-gray-600 text-sm mb-2">{campaign.description}</p>
                   )}
                   <span className={`text-xs px-2 py-1 rounded-full ${
-                    campaign.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+                    campaign.status === 'active' ? 'bg-green-100 text-green-800' :
+                    campaign.status === 'paused' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-gray-100 text-gray-600'
                   }`}>
                     {campaign.status}
                   </span>
                 </div>
               </div>
 
-              {progress[campaign.id] && (
-                <div className="mb-4 space-y-2">
-                  <div className="text-sm">
-                    <strong>Total Leads:</strong> {progress[campaign.id].total_leads}
-                  </div>
-                  <div className="text-sm">
-                    <strong>Active:</strong> {progress[campaign.id].active_leads} | 
-                    <strong> Completed:</strong> {progress[campaign.id].completed_leads} | 
-                    <strong> Replied:</strong> {progress[campaign.id].replied_leads}
-                  </div>
-                  <div className="text-sm">
-                    <strong>Avg Step:</strong> {progress[campaign.id].avg_step.toFixed(1)}
-                  </div>
-                  {progress[campaign.id].total_leads > 0 && (
-                    <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div 
-                        className="bg-blue-600 h-2 rounded-full" 
-                        style={{ 
-                          width: `${(progress[campaign.id].completed_leads / progress[campaign.id].total_leads) * 100}%` 
-                        }}
-                      ></div>
-                    </div>
-                  )}
+              <div className="mb-4 space-y-2">
+                <div className="text-sm">
+                  <strong>Total Leads:</strong> {campaign.total_leads}
                 </div>
-              )}
+                <div className="text-sm">
+                  <strong>Sent:</strong> {campaign.emails_sent} | 
+                  <strong> Opened:</strong> {campaign.emails_opened}
+                </div>
+                <div className="text-sm">
+                  <strong>Completion Rate:</strong> {campaign.completion_rate}% | 
+                  <strong> Open Rate:</strong> {campaign.open_rate}%
+                </div>
+                {campaign.total_leads > 0 && (
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div 
+                      className="bg-blue-600 h-2 rounded-full" 
+                      style={{ 
+                        width: `${campaign.completion_rate}%` 
+                      }}
+                    ></div>
+                  </div>
+                )}
+              </div>
 
               <div className="flex justify-between items-center">
                 <span className="text-xs text-gray-500">
                   Created {new Date(campaign.created_at).toLocaleDateString()}
                 </span>
-                <div className="space-x-2">
+                <div className="flex flex-wrap gap-2">
                   <Link href={`/campaigns/${campaign.id}`}>
                     <Button variant="outline" size="sm">View Details</Button>
                   </Link>
+                  {campaign.status === 'active' && (
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => pauseCampaign(campaign.id, campaign.name)}
+                      className="text-yellow-600 hover:text-yellow-700 hover:border-yellow-300"
+                    >
+                      Pause
+                    </Button>
+                  )}
+                  {campaign.status === 'paused' && (
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => unpauseCampaign(campaign.id, campaign.name)}
+                      className="text-green-600 hover:text-green-700 hover:border-green-300"
+                    >
+                      Resume
+                    </Button>
+                  )}
                   <Button 
                     variant="outline" 
                     size="sm" 
@@ -176,6 +202,21 @@ function SequencesPage() {
               </div>
             </Card>
           ))}
+        </div>
+      )}
+      
+      {/* Pagination */}
+      {paginatedData && paginatedData.total_pages > 1 && (
+        <div className="mt-8">
+          <Pagination
+            currentPage={paginatedData.page}
+            totalPages={paginatedData.total_pages}
+            hasNext={paginatedData.has_next}
+            hasPrev={paginatedData.has_prev}
+            onPageChange={goToPage}
+            totalItems={paginatedData.total}
+            itemsPerPage={paginatedData.per_page}
+          />
         </div>
       )}
     </div>

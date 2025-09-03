@@ -2,10 +2,11 @@
 
 import { useState } from 'react';
 import { Button } from '../ui/button';
-import { Lead, NewLead } from '@/types';
+import { Lead, NewLead, Campaign } from '@/types';
 
 interface LeadFormProps {
   lead?: Lead | null;
+  campaigns?: Campaign[];
   onSubmit: (leadData: NewLead) => Promise<void>;
   onCancel: () => void;
   isLoading?: boolean;
@@ -18,7 +19,7 @@ const commonIndustries = [
   'Hospitality', 'Transportation', 'Energy', 'Media', 'Entertainment', 'Other'
 ];
 
-export default function LeadForm({ lead, onSubmit, onCancel, isLoading }: LeadFormProps) {
+export default function LeadForm({ lead, campaigns, onSubmit, onCancel, isLoading }: LeadFormProps) {
   const [formData, setFormData] = useState<NewLead>({
     email: lead?.email || '',
     first_name: lead?.first_name || '',
@@ -27,7 +28,8 @@ export default function LeadForm({ lead, onSubmit, onCancel, isLoading }: LeadFo
     title: lead?.title || '',
     phone: lead?.phone || '',
     website: lead?.website || '',
-    industry: lead?.industry || ''
+    industry: lead?.industry || '',
+    campaign_id: undefined
   });
 
   const [customIndustry, setCustomIndustry] = useState('');
@@ -149,6 +151,27 @@ export default function LeadForm({ lead, onSubmit, onCancel, isLoading }: LeadFo
               <option key={industry} value={industry}>{industry}</option>
             ))}
           </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Campaign <span className="text-gray-500 text-xs">(optional)</span>
+          </label>
+          <select
+            value={formData.campaign_id || ''}
+            onChange={(e) => setFormData({ ...formData, campaign_id: e.target.value ? parseInt(e.target.value) : undefined })}
+            className="w-full p-2 border rounded"
+            disabled={isLoading}
+          >
+            <option value="">No Campaign</option>
+            {campaigns?.map(campaign => (
+              <option key={campaign.id} value={campaign.id}>
+                {campaign.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            Assign lead to a campaign to start email sequence automatically
+          </p>
         </div>
       </div>
 

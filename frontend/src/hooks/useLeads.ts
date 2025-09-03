@@ -1,20 +1,47 @@
 import { useState, useEffect } from 'react';
-import { Lead } from '@/types';
+import { Lead, PaginatedResponse } from '@/types';
 import { apiClient } from '@/utils/api';
+import { usePagination } from './usePagination';
 
-export function useLeads() {
+interface UseLeadsOptions {
+  paginated?: boolean;
+  industry?: string;
+  company?: string;
+}
+
+export function useLeads(options: UseLeadsOptions = {}) {
+  const { paginated = false, industry, company } = options;
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [paginatedData, setPaginatedData] = useState<PaginatedResponse<Lead> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  const { pagination, goToPage, getQueryParams } = usePagination({ initialPerPage: 20 });
 
   const fetchLeads = async () => {
     try {
       setLoading(true);
-      const data = await apiClient.getJson<Lead[]>('/api/leads/');
-      setLeads(data);
       setError(null);
+      
+      if (paginated) {
+        const queryParams = getQueryParams();
+        if (industry) queryParams.set('industry', industry);
+        if (company) queryParams.set('company', company);
+        
+        const data = await apiClient.getJson<PaginatedResponse<Lead>>(
+          `/api/leads/paginated?${queryParams}`
+        );
+        setPaginatedData(data);
+        setLeads(data.items);
+      } else {
+        const data = await apiClient.getJson<Lead[]>('/api/leads/');
+        setLeads(data);
+        setPaginatedData(null);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
+      setLeads([]);
+      setPaginatedData(null);
     } finally {
       setLoading(false);
     }
@@ -51,10 +78,13 @@ export function useLeads() {
 
   useEffect(() => {
     fetchLeads();
-  }, []);
+  }, [paginated, pagination.page, pagination.per_page, industry, company]);
 
   return {
     leads,
+    paginatedData,
+    pagination,
+    goToPage,
     loading,
     error,
     refetch: fetchLeads,

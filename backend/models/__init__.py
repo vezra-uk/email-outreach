@@ -5,6 +5,7 @@ from .tracking import LinkClick, EmailTrackingEvent, EmailOpenAnalysis
 from .groups import LeadGroup, LeadGroupMembership
 from .sending_profile import SendingProfile
 from .user import User, APIKey
+from .deliverability import DeliverabilityMetric, PostmasterMetric, BlacklistStatus, DNSAuthRecord, DeliverabilityAlert
 
 __all__ = [
     "Base",
@@ -13,5 +14,6 @@ __all__ = [
     "LinkClick", "EmailTrackingEvent", "EmailOpenAnalysis",
     "LeadGroup", "LeadGroupMembership",
     "SendingProfile",
-    "User", "APIKey"
+    "User", "APIKey",
+    "DeliverabilityMetric", "PostmasterMetric", "BlacklistStatus", "DNSAuthRecord", "DeliverabilityAlert"
 ]

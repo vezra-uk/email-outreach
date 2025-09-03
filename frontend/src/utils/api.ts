@@ -94,6 +94,14 @@ class ApiClient {
     return this.request(endpoint, { ...options, method: 'DELETE' });
   }
 
+  async patch(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<Response> {
+    return this.request(endpoint, {
+      ...options,
+      method: 'PATCH',
+      body: data ? JSON.stringify(data) : undefined,
+    });
+  }
+
   // Convenience methods that return JSON
   async getJson<T>(endpoint: string): Promise<T> {
     const response = await this.get(endpoint);
@@ -131,6 +139,23 @@ class ApiClient {
 
   async putJson<T>(endpoint: string, data?: any): Promise<T> {
     const response = await this.put(endpoint, data);
+    if (!response.ok) {
+      let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
+      try {
+        const errorData = await response.json();
+        if (errorData.detail) {
+          errorMessage += ` - ${JSON.stringify(errorData.detail)}`;
+        }
+      } catch {
+        // If we can't parse the error response, use the default message
+      }
+      throw new Error(errorMessage);
+    }
+    return response.json();
+  }
+
+  async patchJson<T>(endpoint: string, data?: any): Promise<T> {
+    const response = await this.patch(endpoint, data);
     if (!response.ok) {
       let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
       try {

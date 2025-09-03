@@ -4,13 +4,14 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Dialog } from '../../components/ui/dialog';
+import { Pagination } from '../../components/ui/pagination';
 import { Plus, Filter, Upload, Download, Settings } from 'lucide-react';
 import CSVUpload from '../../components/CSVUpload';
 import LeadForm from '../../components/forms/LeadForm';
 import BulkLeadImportForm from '../../components/forms/BulkLeadImportForm';
 import LeadsTable from '../../components/LeadsTable';
 import { useLeads } from '@/hooks/useLeads';
-import { Lead, NewLead } from '@/types';
+import { Lead, NewLead, Campaign } from '@/types';
 import { withAuth } from '../../contexts/AuthContext';
 import { apiClient } from '@/utils/api';
 
@@ -20,8 +21,8 @@ interface BulkImportResult {
 }
 
 function Leads() {
-  const { leads, loading, error, refetch, createLead, updateLead, deleteLead } = useLeads();
   const [industries, setIndustries] = useState<string[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showBulkForm, setShowBulkForm] = useState(false);
   const [showCSVUpload, setShowCSVUpload] = useState(false);
@@ -31,9 +32,28 @@ function Leads() {
   const [searchCompany, setSearchCompany] = useState('');
   const [showIndustryManager, setShowIndustryManager] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [appliedFilters, setAppliedFilters] = useState({ industry: '', company: '' });
+  
+  const { 
+    leads, 
+    paginatedData, 
+    pagination, 
+    goToPage, 
+    loading, 
+    error, 
+    refetch, 
+    createLead, 
+    updateLead, 
+    deleteLead 
+  } = useLeads({ 
+    paginated: true, 
+    industry: appliedFilters.industry || undefined,
+    company: appliedFilters.company || undefined 
+  });
 
   useEffect(() => {
     fetchIndustries();
+    fetchCampaigns();
   }, []);
 
   const fetchIndustries = async () => {
@@ -43,6 +63,16 @@ function Leads() {
     } catch (error) {
       console.error('Failed to fetch industries:', error);
       setIndustries([]);
+    }
+  };
+
+  const fetchCampaigns = async () => {
+    try {
+      const data = await apiClient.getJson('/api/campaigns');
+      setCampaigns(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Failed to fetch campaigns:', error);
+      setCampaigns([]);
     }
   };
 
@@ -148,14 +178,20 @@ function Leads() {
     return <div className="p-8 text-red-600">Error: {error}</div>;
   }
 
-  // Filter leads based on selected criteria
-  const filteredLeads = leads.filter(lead => {
-    const matchesIndustry = !selectedIndustry || lead.industry === selectedIndustry;
-    const matchesCompany = !searchCompany || 
-      (lead.company && lead.company.toLowerCase().includes(searchCompany.toLowerCase()));
-    
-    return matchesIndustry && matchesCompany;
-  });
+  // Apply filters (now handled server-side)
+  const applyFilters = () => {
+    setAppliedFilters({ industry: selectedIndustry, company: searchCompany });
+  };
+  
+  // Reset filters
+  const clearFilters = () => {
+    setSelectedIndustry('');
+    setSearchCompany('');
+    setAppliedFilters({ industry: '', company: '' });
+  };
+  
+  // Use leads directly since filtering is now server-side
+  const filteredLeads = leads;
 
   return (
     <div className="p-8">
@@ -206,8 +242,19 @@ function Leads() {
               value={searchCompany}
               onChange={(e) => setSearchCompany(e.target.value)}
               className="p-2 border rounded"
+              onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
             />
           </div>
+          
+          <Button onClick={applyFilters} variant="outline">
+            Apply Filters
+          </Button>
+          
+          {(appliedFilters.industry || appliedFilters.company) && (
+            <Button onClick={clearFilters} variant="outline">
+              Clear Filters
+            </Button>
+          )}
         </div>
       </div>
 
@@ -219,6 +266,7 @@ function Leads() {
           </CardHeader>
           <CardContent>
             <LeadForm
+              campaigns={campaigns}
               onSubmit={handleAddLead}
               onCancel={() => setShowAddForm(false)}
               isLoading={isSubmitting}
@@ -238,6 +286,7 @@ function Leads() {
         {editingLead && (
           <LeadForm
             lead={editingLead}
+            campaigns={campaigns}
             onSubmit={handleUpdateLead}
             onCancel={() => {
               setShowEditForm(false);
@@ -283,7 +332,14 @@ function Leads() {
       {/* Leads Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Leads ({filteredLeads.length})</CardTitle>
+          <CardTitle>
+            Leads ({paginatedData ? paginatedData.total : filteredLeads.length})
+            {(appliedFilters.industry || appliedFilters.company) && (
+              <span className="text-sm font-normal text-gray-600 ml-2">
+                (filtered)
+              </span>
+            )}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <LeadsTable
@@ -291,6 +347,21 @@ function Leads() {
             onEdit={handleEditLead}
             onDelete={handleDeleteLead}
           />
+          
+          {/* Pagination */}
+          {paginatedData && paginatedData.total_pages > 1 && (
+            <div className="mt-6">
+              <Pagination
+                currentPage={paginatedData.page}
+                totalPages={paginatedData.total_pages}
+                hasNext={paginatedData.has_next}
+                hasPrev={paginatedData.has_prev}
+                onPageChange={goToPage}
+                totalItems={paginatedData.total}
+                itemsPerPage={paginatedData.per_page}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

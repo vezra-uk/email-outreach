@@ -33,6 +33,7 @@ def send_sequence_batch():
     emails_sent = 0
     sequences_processed = 0
     errors = []
+    skipped_summaries = {}
     
     try:
         # Check daily limit first
@@ -51,10 +52,11 @@ def send_sequence_batch():
             return {"emails_sent": 0, "sequences_processed": 0, "errors": ["Daily limit reached"]}
         
         now = datetime.utcnow()
-        due_sequences = db.query(LeadCampaign).filter(
+        due_sequences = db.query(LeadCampaign).join(Campaign, LeadCampaign.sequence_id == Campaign.id).filter(
             LeadCampaign.status == "active",
-            LeadCampaign.next_send_at <= now
-        ).order_by(LeadCampaign.next_send_at.asc()).limit(min(remaining_quota, 50)).all()
+            LeadCampaign.next_send_at <= now,
+            Campaign.status == "active"  # Skip paused campaigns
+        ).order_by(LeadCampaign.current_step.desc(), LeadCampaign.next_send_at.asc()).limit(min(remaining_quota, 50)).all()
         
         sequences_processed = len(due_sequences)
         
@@ -70,8 +72,8 @@ def send_sequence_batch():
             sequences_processed = len(due_sequences)
             logger.info(f"Limiting batch to {max_batch_size} emails to mimic human sending patterns")
         
-        # Sequences are already ordered by next_send_at (oldest first) to prioritize overdue emails
-        logger.info(f"Processing {len(due_sequences)} emails in chronological order (oldest first)")
+        # Sequences are ordered by current_step (desc) then next_send_at (asc) to prioritize sequence completion
+        logger.info(f"Processing {len(due_sequences)} emails with follow-ups prioritized over first emails")
         
         # Add a small initial random delay to spread out batch processing
         initial_delay = random.randint(5, 60)
@@ -105,11 +107,9 @@ def send_sequence_batch():
                 # Check if sending is allowed based on schedule (skip this email if not)
                 is_allowed, schedule_reason = email_service.is_sending_allowed(sending_profile)
                 if not is_allowed:
-                    logger.info(f"Skipping email for lead {lead_seq.lead_id}: {schedule_reason}", extra={
-                        "lead_id": lead_seq.lead_id,
-                        "sequence_id": lead_seq.sequence_id,
-                        "schedule_reason": schedule_reason
-                    })
+                    if schedule_reason not in skipped_summaries:
+                        skipped_summaries[schedule_reason] = []
+                    skipped_summaries[schedule_reason].append(lead_seq.lead_id)
                     continue
                 
                 reply_check = db.query(EmailReply).filter(
@@ -235,6 +235,14 @@ def send_sequence_batch():
                 errors.append(error_msg)
         
         db.commit()
+        
+        # Log skip summaries if any emails were skipped
+        for reason, lead_ids in skipped_summaries.items():
+            logger.info(f"Skipped {len(lead_ids)} emails: {reason}", extra={
+                "skipped_count": len(lead_ids),
+                "skip_reason": reason,
+                "lead_ids": lead_ids
+            })
         
         logger.info(f"Batch completed: {emails_sent} emails sent, {sequences_processed} sequences processed", extra={
             "emails_sent": emails_sent,

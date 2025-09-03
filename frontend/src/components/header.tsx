@@ -1,7 +1,7 @@
 // frontend/src/components/Header.tsx
 'use client'
 import { usePathname } from 'next/navigation'
-import { Mail, BarChart3, Users, Plus, Zap, Folder, UserCircle, LogOut, ChevronDown, Eye } from 'lucide-react'
+import { Mail, BarChart3, Users, Plus, Zap, Folder, UserCircle, LogOut, ChevronDown, Eye, Key, Shield } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useState, useEffect, useRef } from 'react'
 
@@ -27,6 +27,7 @@ export default function Header() {
   const primaryNavigation = [
     { name: 'Dashboard', href: '/', icon: BarChart3 },
     { name: 'Campaigns', href: '/campaigns', icon: Mail },
+    { name: 'Deliverability', href: '/deliverability', icon: Shield },
   ]
 
   // Secondary navigation items (in dropdown)
@@ -35,6 +36,7 @@ export default function Header() {
     { name: 'Email Opens', href: '/opens', icon: Eye },
     { name: 'Groups', href: '/groups', icon: Folder },
     { name: 'Profiles', href: '/profiles', icon: UserCircle },
+    { name: 'API Keys', href: '/api-keys', icon: Key },
   ]
 
   const allNavigation = [...primaryNavigation, ...secondaryNavigation]

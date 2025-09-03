@@ -22,18 +22,8 @@ class TrackingSignal:
 
 class ModernOpenTracker:
     
-    # Known problematic patterns (only very specific scanner indicators)
-    SCANNER_PATTERNS = [
-        'googleimageproxy',
-        'ggpht.com', 
-        'mailscanner',
-        'emailscanner',
-        'Microsoft Office Excel',  # Outlook security scanning
-        'Microsoft Office Outlook',  # Outlook security scanning (but allow normal Outlook)
-    ]
-    
-    # Scanner detection threshold (scanners hit quickly after send)
-    SCANNER_TIMING_THRESHOLD = 600  # 10 minutes
+    # Scanner timing threshold - focus purely on timing behavior
+    SCANNER_TIMING_THRESHOLD = 120  # 2 minutes
     
     def __init__(self):
         self.tracking_signals = {}
@@ -82,55 +72,33 @@ class ModernOpenTracker:
         }
     
     def analyze_user_agent(self, user_agent: str) -> Tuple[bool, float]:
-        """Analyze user agent to detect scanner/prefetch behavior"""
+        """Simplified user agent analysis - only check for obvious bots"""
         if not user_agent:
-            return True, 0.3  # Suspicious but possible
+            return False, 0.8  # Missing UA is fine, focus on timing
         
         user_agent_lower = user_agent.lower()
         
-        # Email scanners and proxies (major penalty)
-        for pattern in self.SCANNER_PATTERNS:
-            if pattern.lower() in user_agent_lower:
-                return True, 0.05  # Very likely scanner
-        
-        # Check for automation indicators
+        # Only flag obvious automation indicators
         automation_indicators = ['bot', 'crawler', 'spider', 'automated', 'headless']
         for indicator in automation_indicators:
             if indicator in user_agent_lower:
-                return True, 0.0  # Definitely automated
+                return True, 0.1  # Definitely automated
         
-        # Email clients (good indicators)
-        email_client_indicators = ['thunderbird', 'outlook', 'apple mail']
-        for indicator in email_client_indicators:
-            if indicator in user_agent_lower:
-                return False, 0.9  # Likely real user
-        
-        # Real user patterns (browsers and webmail)
-        real_user_indicators = ['chrome', 'firefox', 'safari', 'edge', 'opera', 'mozilla']
-        for indicator in real_user_indicators:
-            if indicator in user_agent_lower:
-                return False, 0.7  # Likely real user (including webmail)
-        
-        return False, 0.5  # Unknown but assume real
+        return False, 0.9  # Default to assuming real user
     
     def analyze_timing(self, send_time: datetime, open_time: datetime) -> Tuple[bool, float]:
-        """Analyze time-since-send to detect scanner vs human behavior"""
+        """Analyze time-since-send using graduated confidence scoring"""
         time_diff = (open_time - send_time).total_seconds()
         
-        # Scanners typically hit within minutes of sending
-        if time_diff < 600:  # Less than 10 minutes
-            return True, 0.1  # Likely scanner
-        
-        # Quick but plausible human response (10 min - 1 hour)
-        if time_diff < 3600:
-            return False, 0.6  # Moderate confidence
-        
-        # Normal human timing (1-4 hours)
-        if time_diff < 14400:
-            return False, 0.9  # High confidence
-        
-        # Delayed opens (4+ hours) - still human but lower engagement
-        return False, 0.7
+        # Graduated confidence based on timing
+        if time_diff < 30:  # 0-30 seconds
+            return True, 0.05  # Definitely automated scanner
+        elif time_diff < 120:  # 30s-2 minutes  
+            return True, 0.2   # Likely automated scanner
+        elif time_diff < 600:  # 2-10 minutes
+            return False, 0.6  # Possible user
+        else:  # 10+ minutes
+            return False, 0.9  # Definitely user
     
     def calculate_confidence_score(self, signals: List[TrackingSignal], 
                                  send_time: datetime) -> float:

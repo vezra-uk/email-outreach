@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from main import DailyStats, Campaign, Lead, LeadCampaign, SendingProfile
 from services.email_batch import send_sequence_batch
+from services.deliverability_monitor import DeliverabilityMonitor
 from email_service import EmailService
 import logging
 
@@ -24,6 +25,7 @@ class EmailScheduler:
             self.engine = create_engine(os.getenv("DATABASE_URL"))
             self.SessionLocal = sessionmaker(bind=self.engine)
             self.email_service = EmailService()
+            self.deliverability_monitor = DeliverabilityMonitor()
             self.daily_limit = int(os.getenv("DAILY_EMAIL_LIMIT", 30))
             
             logger.info("EmailScheduler initialized successfully", extra={
@@ -52,6 +54,25 @@ class EmailScheduler:
             }, exc_info=True)
             raise
     
+    def run_deliverability_check(self):
+        """Run deliverability monitoring checks"""
+        logger.info("Starting deliverability check job")
+        
+        try:
+            db = self.SessionLocal()
+            try:
+                results = self.deliverability_monitor.run_full_check(db)
+                logger.info("Deliverability check completed successfully", extra={
+                    "results": results
+                })
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error("Failed to run deliverability check", extra={
+                "error": str(e),
+                "error_type": type(e).__name__
+            }, exc_info=True)
+    
     def start_scheduler(self):
         """Start the email scheduler"""
         logger.info("Starting email scheduler")
@@ -59,8 +80,12 @@ class EmailScheduler:
         # Schedule sequence emails every 5 minutes
         schedule.every(5).minutes.do(self.send_sequence_emails)
         
+        # Schedule deliverability checks daily at 6 AM
+        schedule.every().day.at("06:00").do(self.run_deliverability_check)
+        
         logger.info("Email scheduler configured", extra={
             "sequence_interval_minutes": 5,
+            "deliverability_check_time": "06:00",
             "sleep_interval_seconds": 60
         })
         

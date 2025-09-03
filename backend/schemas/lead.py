@@ -11,6 +11,7 @@ class LeadCreate(BaseModel):
     phone: Optional[str] = None
     website: Optional[str] = None
     industry: Optional[str] = None
+    campaign_id: Optional[int] = None
 
 class LeadUpdate(BaseModel):
     email: Optional[str] = None

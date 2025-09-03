@@ -6,6 +6,7 @@ import { Button } from '../components/ui/button'
 import { Plus, Mail, Users, Activity, Eye, BarChart3, TrendingUp } from 'lucide-react'
 import { withAuth } from '../contexts/AuthContext'
 import { apiClient } from '../utils/api'
+import { TodaysSummary } from '../components/TodaysSummary'
 
 interface DashboardStats {
   total_leads: number
@@ -231,6 +232,11 @@ function Dashboard() {
             <Users className="mr-2 h-4 w-4" />
             Manage Leads
           </Button>
+        </div>
+
+        {/* Today's Summary */}
+        <div className="space-y-6">
+          <TodaysSummary />
         </div>
 
         {/* Campaign Overview */}

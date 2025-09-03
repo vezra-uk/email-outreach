@@ -17,6 +17,7 @@ interface SequenceStep {
   delay_days: number;
   delay_hours: number;
   is_active: string;
+  include_previous_emails?: boolean;
 }
 
 interface Campaign {
@@ -37,6 +38,22 @@ interface CampaignProgress {
   avg_step: number;
 }
 
+interface EnrolledLead {
+  id: number;
+  lead_id: number;
+  sequence_id: number;
+  current_step: number;
+  status: string;
+  started_at: string;
+  next_send_at: string | null;
+  last_sent_at: string | null;
+  first_name: string;
+  last_name: string;
+  email: string;
+  company: string | null;
+  lead_status: string;
+}
+
 function SequenceDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -47,7 +64,23 @@ function SequenceDetailPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selectedLeads, setSelectedLeads] = useState<number[]>([]);
   const [showAddLeads, setShowAddLeads] = useState(false);
+  const [enrolledLeads, setEnrolledLeads] = useState<EnrolledLead[]>([]);
+  const [showEnrolledLeads, setShowEnrolledLeads] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [editingStep, setEditingStep] = useState<number | null>(null);
+  const [editingStepData, setEditingStepData] = useState<{
+    name: string;
+    ai_prompt: string;
+    delay_days: number;
+    delay_hours: number;
+    include_previous_emails: boolean;
+  }>({
+    name: '',
+    ai_prompt: '',
+    delay_days: 0,
+    delay_hours: 0,
+    include_previous_emails: false
+  });
 
   useEffect(() => {
     if (sequenceId) {
@@ -82,6 +115,29 @@ function SequenceDetailPage() {
       setLeads(data);
     } catch (error) {
       console.error('Error fetching leads:', error);
+    }
+  };
+
+  const fetchEnrolledLeads = async () => {
+    try {
+      const data = await apiClient.getJson<EnrolledLead[]>(`/api/campaigns/${sequenceId}/leads`);
+      setEnrolledLeads(data);
+    } catch (error) {
+      console.error('Error fetching enrolled leads:', error);
+    }
+  };
+
+  const removeLeadFromCampaign = async (leadId: number, leadName: string) => {
+    if (confirm(`Remove ${leadName} from this campaign? This will stop all future emails for this lead.`)) {
+      try {
+        await apiClient.delete(`/api/campaigns/${sequenceId}/leads/${leadId}`);
+        alert('Lead removed from campaign successfully!');
+        fetchEnrolledLeads(); // Refresh the list
+        fetchCampaignProgress(); // Update progress stats
+      } catch (error) {
+        console.error('Error removing lead:', error);
+        alert('Failed to remove lead from campaign');
+      }
     }
   };
 
@@ -128,6 +184,49 @@ function SequenceDetailPage() {
     );
   };
 
+  const startEditStep = (step: SequenceStep) => {
+    setEditingStep(step.id);
+    setEditingStepData({
+      name: step.name,
+      ai_prompt: step.ai_prompt || '',
+      delay_days: step.delay_days,
+      delay_hours: step.delay_hours,
+      include_previous_emails: step.include_previous_emails || false
+    });
+  };
+
+  const cancelEditStep = () => {
+    setEditingStep(null);
+    setEditingStepData({
+      name: '',
+      ai_prompt: '',
+      delay_days: 0,
+      delay_hours: 0,
+      include_previous_emails: false
+    });
+  };
+
+  const saveStepEdit = async () => {
+    if (!editingStep) return;
+
+    try {
+      await apiClient.patchJson(`/api/campaigns/${sequenceId}/steps/${editingStep}`, {
+        name: editingStepData.name,
+        ai_prompt: editingStepData.ai_prompt,
+        delay_days: editingStepData.delay_days,
+        delay_hours: editingStepData.delay_hours,
+        include_previous_emails: editingStepData.include_previous_emails
+      });
+
+      alert('Step updated successfully!');
+      cancelEditStep();
+      fetchSequenceDetail(); // Refresh the sequence data
+    } catch (error) {
+      console.error('Error updating step:', error);
+      alert('Failed to update step');
+    }
+  };
+
   if (loading) {
     return <div className="p-8">Loading sequence details...</div>;
   }
@@ -152,6 +251,15 @@ function SequenceDetailPage() {
         </div>
         
         <div className="space-x-4">
+          <Button 
+            onClick={() => {
+              setShowEnrolledLeads(true);
+              fetchEnrolledLeads();
+            }}
+            variant="outline"
+          >
+            View Enrolled Leads
+          </Button>
           <Button 
             onClick={() => {
               setShowAddLeads(true);
@@ -224,35 +332,126 @@ function SequenceDetailPage() {
         <div className="space-y-6">
           {sequence.steps.map((step, index) => (
             <div key={step.id} className="border border-gray-200 rounded-lg p-6">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center">
-                  <div className="w-8 h-8 bg-blue-100 text-blue-800 rounded-full flex items-center justify-center font-semibold mr-4">
-                    {step.step_number}
+              {editingStep === step.id ? (
+                // Edit Mode
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center">
+                      <div className="w-8 h-8 bg-blue-100 text-blue-800 rounded-full flex items-center justify-center font-semibold mr-4">
+                        {step.step_number}
+                      </div>
+                      <input
+                        type="text"
+                        value={editingStepData.name}
+                        onChange={(e) => setEditingStepData(prev => ({ ...prev, name: e.target.value }))}
+                        className="text-lg font-medium border border-gray-300 rounded px-2 py-1"
+                        placeholder="Step name"
+                      />
+                    </div>
+                    <div className="flex space-x-2">
+                      <Button onClick={saveStepEdit} size="sm">Save</Button>
+                      <Button onClick={cancelEditStep} size="sm" variant="outline">Cancel</Button>
+                    </div>
                   </div>
-                  <h3 className="text-lg font-medium">{step.name}</h3>
+                  
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Delay Days</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={editingStepData.delay_days}
+                        onChange={(e) => setEditingStepData(prev => ({ ...prev, delay_days: parseInt(e.target.value) || 0 }))}
+                        className="w-full border border-gray-300 rounded px-2 py-1"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Delay Hours</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="23"
+                        value={editingStepData.delay_hours}
+                        onChange={(e) => setEditingStepData(prev => ({ ...prev, delay_hours: parseInt(e.target.value) || 0 }))}
+                        className="w-full border border-gray-300 rounded px-2 py-1"
+                      />
+                    </div>
+                    <div>
+                      <label className="flex items-center space-x-2 text-sm font-medium">
+                        <input
+                          type="checkbox"
+                          checked={editingStepData.include_previous_emails}
+                          onChange={(e) => setEditingStepData(prev => ({ ...prev, include_previous_emails: e.target.checked }))}
+                        />
+                        <span>Include Previous Emails</span>
+                      </label>
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium mb-2">AI Generation Instructions</label>
+                    <textarea
+                      value={editingStepData.ai_prompt}
+                      onChange={(e) => setEditingStepData(prev => ({ ...prev, ai_prompt: e.target.value }))}
+                      placeholder="Enter detailed instructions for AI email generation..."
+                      rows={4}
+                      className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+                    />
+                    <div className="mt-1 text-xs text-gray-500">
+                      💡 The AI will generate both subject line and email content based on these instructions for each lead.
+                    </div>
+                  </div>
                 </div>
-                <div className="text-sm text-gray-600">
-                  {step.delay_days > 0 || step.delay_hours > 0 ? (
-                    <>
-                      Wait: {step.delay_days > 0 && `${step.delay_days}d`}
-                      {step.delay_days > 0 && step.delay_hours > 0 && ' '}
-                      {step.delay_hours > 0 && `${step.delay_hours}h`}
-                    </>
-                  ) : (
-                    'Send immediately'
-                  )}
-                </div>
-              </div>
-              
-              {step.ai_prompt && (
+              ) : (
+                // View Mode
                 <div>
-                  <strong>AI Generation Instructions:</strong>
-                  <div className="mt-2 p-3 bg-blue-50 rounded-md text-sm">
-                    {step.ai_prompt}
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center">
+                      <div className="w-8 h-8 bg-blue-100 text-blue-800 rounded-full flex items-center justify-center font-semibold mr-4">
+                        {step.step_number}
+                      </div>
+                      <h3 className="text-lg font-medium">{step.name}</h3>
+                    </div>
+                    <div className="flex items-center space-x-4">
+                      <div className="text-sm text-gray-600">
+                        {step.delay_days > 0 || step.delay_hours > 0 ? (
+                          <>
+                            Wait: {step.delay_days > 0 && `${step.delay_days}d`}
+                            {step.delay_days > 0 && step.delay_hours > 0 && ' '}
+                            {step.delay_hours > 0 && `${step.delay_hours}h`}
+                          </>
+                        ) : (
+                          'Send immediately'
+                        )}
+                      </div>
+                      <Button
+                        onClick={() => startEditStep(step)}
+                        size="sm"
+                        variant="outline"
+                        className="text-blue-600 hover:text-blue-700 hover:border-blue-300"
+                      >
+                        Edit
+                      </Button>
+                    </div>
                   </div>
-                  <div className="mt-2 text-xs text-gray-500">
-                    💡 The AI will generate both subject line and email content based on these instructions for each lead.
-                  </div>
+                  
+                  {step.ai_prompt && (
+                    <div>
+                      <strong>AI Generation Instructions:</strong>
+                      <div className="mt-2 p-3 bg-blue-50 rounded-md text-sm">
+                        {step.ai_prompt}
+                      </div>
+                      <div className="mt-2 text-xs text-gray-500">
+                        💡 The AI will generate both subject line and email content based on these instructions for each lead.
+                      </div>
+                    </div>
+                  )}
+                  
+                  {step.include_previous_emails && (
+                    <div className="mt-3 text-sm text-purple-600">
+                      📧 Includes context from previous emails in sequence
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -306,6 +505,111 @@ function SequenceDetailPage() {
               >
                 Add {selectedLeads.length} Leads
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Enrolled Leads Modal */}
+      {showEnrolledLeads && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-6xl max-h-[90vh] overflow-hidden">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-semibold">Enrolled Leads ({enrolledLeads.length})</h2>
+              <Button 
+                variant="outline" 
+                onClick={() => setShowEnrolledLeads(false)}
+              >
+                Close
+              </Button>
+            </div>
+            
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse border border-gray-200">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="border border-gray-200 p-3 text-left text-sm font-medium">Lead</th>
+                    <th className="border border-gray-200 p-3 text-left text-sm font-medium">Email</th>
+                    <th className="border border-gray-200 p-3 text-left text-sm font-medium">Company</th>
+                    <th className="border border-gray-200 p-3 text-left text-sm font-medium">Status</th>
+                    <th className="border border-gray-200 p-3 text-left text-sm font-medium">Current Step</th>
+                    <th className="border border-gray-200 p-3 text-left text-sm font-medium">Next Send</th>
+                    <th className="border border-gray-200 p-3 text-left text-sm font-medium">Last Sent</th>
+                    <th className="border border-gray-200 p-3 text-left text-sm font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {enrolledLeads.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="border border-gray-200 p-8 text-center text-gray-500">
+                        No leads enrolled in this campaign
+                      </td>
+                    </tr>
+                  ) : (
+                    enrolledLeads.map((lead) => (
+                      <tr key={lead.id} className="hover:bg-gray-50">
+                        <td className="border border-gray-200 p-3">
+                          <div className="font-medium">{lead.first_name} {lead.last_name}</div>
+                        </td>
+                        <td className="border border-gray-200 p-3">
+                          <div className="text-sm">{lead.email}</div>
+                        </td>
+                        <td className="border border-gray-200 p-3">
+                          <div className="text-sm">{lead.company || '-'}</div>
+                        </td>
+                        <td className="border border-gray-200 p-3">
+                          <span className={`text-xs px-2 py-1 rounded-full ${
+                            lead.status === 'active' ? 'bg-green-100 text-green-800' :
+                            lead.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+                            lead.status === 'stopped' ? 'bg-red-100 text-red-800' :
+                            'bg-gray-100 text-gray-600'
+                          }`}>
+                            {lead.status}
+                          </span>
+                        </td>
+                        <td className="border border-gray-200 p-3">
+                          <div className="text-sm">Step {lead.current_step}</div>
+                        </td>
+                        <td className="border border-gray-200 p-3">
+                          <div className="text-xs">
+                            {lead.next_send_at 
+                              ? new Date(lead.next_send_at).toLocaleString() 
+                              : '-'
+                            }
+                          </div>
+                        </td>
+                        <td className="border border-gray-200 p-3">
+                          <div className="text-xs">
+                            {lead.last_sent_at 
+                              ? new Date(lead.last_sent_at).toLocaleString() 
+                              : 'Never'
+                            }
+                          </div>
+                        </td>
+                        <td className="border border-gray-200 p-3">
+                          {lead.status === 'active' && (
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              onClick={() => removeLeadFromCampaign(lead.lead_id, `${lead.first_name} ${lead.last_name}`)}
+                              className="text-red-600 hover:text-red-700 hover:border-red-300"
+                            >
+                              Remove
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            
+            <div className="mt-4 text-sm text-gray-600">
+              Total: {enrolledLeads.length} leads • 
+              Active: {enrolledLeads.filter(l => l.status === 'active').length} • 
+              Completed: {enrolledLeads.filter(l => l.status === 'completed').length} • 
+              Stopped: {enrolledLeads.filter(l => l.status === 'stopped').length}
             </div>
           </div>
         </div>

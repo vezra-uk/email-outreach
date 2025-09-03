@@ -65,6 +65,8 @@ from routers.campaigns import router as campaigns_router
 from routers.groups import router as groups_router
 from routers.sending_profiles import router as sending_profiles_router
 from routers.auth import router as auth_router
+from routers.external_api import router as external_api_router
+from routers.deliverability import router as deliverability_router
 
 api_router.include_router(auth_router)
 api_router.include_router(leads_router)
@@ -73,9 +75,11 @@ api_router.include_router(dashboard_router)
 api_router.include_router(campaigns_router)
 api_router.include_router(groups_router)
 api_router.include_router(sending_profiles_router)
+api_router.include_router(external_api_router)
+api_router.include_router(deliverability_router)
 
 logger.info("All routers included in API", extra={
-    "routers": ["auth", "leads", "csv_upload", "dashboard", "campaigns", "groups", "sending_profiles"]
+    "routers": ["auth", "leads", "csv_upload", "dashboard", "campaigns", "groups", "sending_profiles", "external_api", "deliverability"]
 })
 
 # Message Preview Endpoint
@@ -313,6 +317,23 @@ def track_signal(
         signal = modern_tracker.record_tracking_signal(
             tracking_id, signal_type, user_agent, ip_address, send_time
         )
+        
+        # Save to database
+        db_event = EmailTrackingEvent(
+            tracking_id=tracking_id,
+            event_type='pixel_load',
+            signal_type=signal_type,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            timestamp=signal.timestamp,
+            delay_from_send=int((signal.timestamp - send_time).total_seconds()),
+            is_prefetch=signal.confidence < 0.3,
+            confidence_score=signal.confidence,
+            event_metadata=signal.metadata
+        )
+        db.add(db_event)
+        db.commit()
+        
         logger.debug("Tracking signal recorded successfully", extra={
             "tracking_id": tracking_id,
             "signal_type": signal_type
@@ -324,9 +345,36 @@ def track_signal(
             "error": str(e),
             "error_type": type(e).__name__
         }, exc_info=True)
+        db.rollback()
         raise HTTPException(status_code=500, detail="Failed to record tracking signal")
     
     analysis = modern_tracker.get_open_analysis(tracking_id, send_time)
+    
+    # Save/update aggregated analysis
+    db_analysis = db.query(EmailOpenAnalysis).filter(
+        EmailOpenAnalysis.tracking_id == tracking_id
+    ).first()
+    
+    if not db_analysis:
+        db_analysis = EmailOpenAnalysis(
+            tracking_id=tracking_id,
+            lead_sequence_id=campaign_email.lead_sequence_id if campaign_email else None,
+            sequence_email_id=campaign_email.id if campaign_email else None
+        )
+        db.add(db_analysis)
+    
+    # Update analysis data
+    db_analysis.total_signals = analysis['total_signals']
+    db_analysis.confidence_score = analysis['confidence_score'] 
+    db_analysis.is_opened = analysis['is_opened']
+    db_analysis.first_open_at = analysis.get('first_signal_at')
+    db_analysis.last_activity_at = analysis.get('last_signal_at')
+    db_analysis.prefetch_signals = analysis.get('prefetch_signals', 0)
+    db_analysis.human_signals = analysis.get('high_confidence_signals', 0)
+    db_analysis.analysis_data = analysis
+    db_analysis.updated_at = datetime.utcnow()
+    
+    db.commit()
     
     confidence_level = "HIGH" if analysis['confidence_score'] > 0.7 else \
                       "MEDIUM" if analysis['confidence_score'] > 0.3 else "LOW"

@@ -13,14 +13,18 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from database import engine, SessionLocal
 from models import Base, User
 from services.auth import AuthService
+from logger_config import get_logger
 
 def main():
+    logger = get_logger(__name__)
     print("🔐 Initializing authentication system...")
     
     # Create tables
     print("Creating authentication tables...")
+    logger.info("Creating authentication database tables")
     Base.metadata.create_all(bind=engine)
     print("✅ Authentication tables created successfully!")
+    logger.info("Authentication tables created successfully")
     
     # Create default admin user
     db = SessionLocal()
@@ -30,6 +34,7 @@ def main():
         if user_count > 0:
             print(f"Users already exist ({user_count} users found)")
             print("Authentication system already initialized!")
+            logger.info(f"Skipping admin user creation - {user_count} users already exist")
             return
         
         print("\nCreating default admin user...")
@@ -59,6 +64,13 @@ def main():
         print(f"   Password: {password}")
         print(f"   ⚠️  IMPORTANT: Change the password after first login!")
         
+        logger.info(f"Default admin user created successfully", extra={
+            "user_id": admin_user.id,
+            "email": admin_user.email,
+            "username": admin_user.username
+        })
+        logger.warning("Default admin password is insecure - change immediately after first login")
+        
         print("\n🎉 Authentication system setup complete!")
         print("\nYou can now:")
         print("1. Login at POST /api/auth/login with the credentials above")
@@ -68,6 +80,10 @@ def main():
         
     except Exception as e:
         print(f"❌ Error creating admin user: {e}")
+        logger.error(f"Failed to create default admin user: {e}", extra={
+            "error": str(e),
+            "error_type": type(e).__name__
+        }, exc_info=True)
         db.rollback()
         sys.exit(1)
     finally:

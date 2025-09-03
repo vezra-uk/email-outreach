@@ -12,6 +12,15 @@ class CampaignStepCreate(BaseModel):
     delay_hours: int = 0
     include_previous_emails: bool = False
 
+class CampaignStepUpdate(BaseModel):
+    name: Optional[str] = None
+    subject: Optional[str] = None
+    template: Optional[str] = None
+    ai_prompt: Optional[str] = None
+    delay_days: Optional[int] = None
+    delay_hours: Optional[int] = None
+    include_previous_emails: Optional[bool] = None
+
 class CampaignStepResponse(BaseModel):
     id: int
     step_number: int
@@ -39,6 +48,22 @@ class CampaignResponse(BaseModel):
     description: Optional[str]
     status: str
     created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class CampaignWithProgress(BaseModel):
+    id: int
+    name: str
+    description: Optional[str]
+    status: str
+    created_at: datetime
+    # Embedded progress data to avoid N+1 queries
+    total_leads: int = 0
+    emails_sent: int = 0
+    emails_opened: int = 0
+    completion_rate: float = 0.0
+    open_rate: float = 0.0
     
     class Config:
         from_attributes = True
@@ -93,3 +118,23 @@ class CampaignProgressSummary(BaseModel):
     click_rate: float
     last_sent_at: Optional[datetime]
     created_at: datetime
+
+class EnrolledLeadResponse(BaseModel):
+    id: int
+    lead_id: int
+    sequence_id: int
+    current_step: int
+    status: str
+    started_at: datetime
+    next_send_at: Optional[datetime]
+    last_sent_at: Optional[datetime]
+    
+    # Lead information
+    first_name: str
+    last_name: str
+    email: str
+    company: Optional[str] = None
+    lead_status: str
+    
+    class Config:
+        from_attributes = True

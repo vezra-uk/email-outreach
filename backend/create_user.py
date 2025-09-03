@@ -15,6 +15,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from database import SessionLocal
 from models import User
 from services.auth import AuthService
+from logger_config import get_logger
 
 def get_user_input():
     """Get user details from command line input."""
@@ -65,16 +66,19 @@ def get_user_input():
 
 def create_user(user_data):
     """Create user in database."""
+    logger = get_logger(__name__)
     db = SessionLocal()
     
     try:
         # Check if user already exists
         if db.query(User).filter(User.email == user_data['email']).first():
             print(f"❌ User with email '{user_data['email']}' already exists")
+            logger.warning(f"User creation failed - email already exists", extra={"email": user_data['email']})
             return False
         
         if db.query(User).filter(User.username == user_data['username']).first():
             print(f"❌ User with username '{user_data['username']}' already exists")
+            logger.warning(f"User creation failed - username already exists", extra={"username": user_data['username']})
             return False
         
         # Create user
@@ -100,10 +104,24 @@ def create_user(user_data):
         print(f"   Admin: {'Yes' if new_user.is_superuser else 'No'}")
         print(f"   Active: {'Yes' if new_user.is_active else 'No'}")
         
+        logger.info(f"User created successfully", extra={
+            "user_id": new_user.id,
+            "email": new_user.email,
+            "username": new_user.username,
+            "is_superuser": new_user.is_superuser,
+            "is_active": new_user.is_active
+        })
+        
         return True
         
     except Exception as e:
         print(f"❌ Error creating user: {e}")
+        logger.error(f"Failed to create user: {e}", extra={
+            "email": user_data.get('email'),
+            "username": user_data.get('username'),
+            "error": str(e),
+            "error_type": type(e).__name__
+        }, exc_info=True)
         db.rollback()
         return False
     finally:

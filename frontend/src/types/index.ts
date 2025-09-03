@@ -61,6 +61,29 @@ export interface Campaign {
   steps?: CampaignStep[];
 }
 
+export interface CampaignWithProgress {
+  id: number;
+  name: string;
+  description?: string;
+  status: string;
+  created_at: string;
+  total_leads: number;
+  emails_sent: number;
+  emails_opened: number;
+  completion_rate: number;
+  open_rate: number;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  per_page: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
 export interface NewLead {
   email: string;
   first_name: string;
@@ -70,4 +93,5 @@ export interface NewLead {
   phone: string;
   website: string;
   industry: string;
+  campaign_id?: number;
 }

@@ -5,6 +5,7 @@ from typing import List
 from datetime import datetime, timedelta
 
 from database import get_db
+from logger_config import get_logger
 from models import Campaign, CampaignStep, LeadCampaign, Lead, User, CampaignEmail
 from dependencies import get_current_active_user
 from schemas.campaign import (
@@ -12,13 +13,18 @@ from schemas.campaign import (
     CampaignResponse, 
     CampaignDetail,
     CampaignStepResponse,
+    CampaignStepUpdate,
     LeadCampaignCreate,
     LeadCampaignResponse,
     CampaignProgress,
-    CampaignProgressSummary
+    CampaignProgressSummary,
+    EnrolledLeadResponse,
+    CampaignWithProgress
 )
+from schemas.common import PaginationParams, PaginatedResponse
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
+logger = get_logger(__name__)
 
 @router.post("", response_model=CampaignResponse)
 def create_campaign(campaign: CampaignCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
@@ -58,9 +64,81 @@ def create_campaign(campaign: CampaignCreate, db: Session = Depends(get_db), cur
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Failed to create campaign: {str(e)}")
 
+@router.get("/paginated", response_model=PaginatedResponse[CampaignWithProgress])
+def get_campaigns_paginated(
+    pagination: PaginationParams = Depends(),
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_active_user)
+):
+    """Get paginated campaigns with embedded progress data (recommended)"""
+    try:
+        # Get total count
+        total = db.query(Campaign).filter(Campaign.status == "active").count()
+        
+        # Calculate offset
+        offset = (pagination.page - 1) * pagination.per_page
+        
+        # Get paginated campaigns
+        campaigns = (
+            db.query(Campaign)
+            .filter(Campaign.status == "active")
+            .offset(offset)
+            .limit(pagination.per_page)
+            .all()
+        )
+        
+        # Build campaigns with progress data to avoid N+1 queries
+        campaigns_with_progress = []
+        for campaign in campaigns:
+            # Calculate progress stats efficiently
+            total_leads = db.query(LeadCampaign).filter(
+                LeadCampaign.sequence_id == campaign.id
+            ).count() or 0
+            
+            emails_sent = db.query(func.distinct(CampaignEmail.lead_sequence_id)).filter(
+                CampaignEmail.lead_sequence_id.in_(
+                    db.query(LeadCampaign.id).filter(LeadCampaign.sequence_id == campaign.id)
+                ),
+                CampaignEmail.status == "sent"
+            ).count() or 0
+            
+            emails_opened = db.query(func.distinct(CampaignEmail.lead_sequence_id)).filter(
+                CampaignEmail.lead_sequence_id.in_(
+                    db.query(LeadCampaign.id).filter(LeadCampaign.sequence_id == campaign.id)
+                ),
+                CampaignEmail.opens > 0
+            ).count() or 0
+            
+            completion_rate = (emails_sent / total_leads * 100) if total_leads > 0 else 0
+            open_rate = (emails_opened / emails_sent * 100) if emails_sent > 0 else 0
+            
+            campaigns_with_progress.append(CampaignWithProgress(
+                id=campaign.id,
+                name=campaign.name,
+                description=campaign.description,
+                status=campaign.status,
+                created_at=campaign.created_at,
+                total_leads=total_leads,
+                emails_sent=emails_sent,
+                emails_opened=emails_opened,
+                completion_rate=round(completion_rate, 1),
+                open_rate=round(open_rate, 1)
+            ))
+        
+        return PaginatedResponse.create(
+            items=campaigns_with_progress,
+            total=total,
+            page=pagination.page,
+            per_page=pagination.per_page
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching paginated campaigns: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching campaigns")
+
 @router.get("", response_model=List[CampaignResponse])
 def get_campaigns(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    """Get all email campaigns"""
+    """Get all email campaigns (legacy endpoint)"""
     campaigns = db.query(Campaign).filter(Campaign.status == "active").all()
     return campaigns
 
@@ -150,6 +228,45 @@ def delete_campaign(campaign_id: int, db: Session = Depends(get_db), current_use
     
     return {"message": "Sequence deleted successfully"}
 
+@router.patch("/{campaign_id}/steps/{step_id}", response_model=CampaignStepResponse)
+def update_campaign_step(
+    campaign_id: int, 
+    step_id: int, 
+    step_update: CampaignStepUpdate,
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_active_user)
+):
+    """Update a specific campaign step"""
+    # Verify campaign exists
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    # Verify step exists and belongs to this campaign
+    step = db.query(CampaignStep).filter(
+        CampaignStep.id == step_id,
+        CampaignStep.sequence_id == campaign_id
+    ).first()
+    if not step:
+        raise HTTPException(status_code=404, detail="Campaign step not found")
+    
+    try:
+        # Update only provided fields
+        update_data = step_update.dict(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(step, field, value)
+        
+        step.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(step)
+        
+        logger.info(f"Campaign step {step_id} updated by user {current_user.id}")
+        return step
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Failed to update campaign step: {str(e)}")
+
 @router.post("/{campaign_id}/leads", response_model=List[LeadCampaignResponse])
 def enroll_leads_in_campaign(
     campaign_id: int, 
@@ -215,20 +332,58 @@ def enroll_leads_in_campaign(
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Failed to enroll leads: {str(e)}")
 
-@router.get("/{campaign_id}/leads", response_model=List[LeadCampaignResponse])
+@router.get("/{campaign_id}/leads", response_model=List[EnrolledLeadResponse])
 def get_campaign_leads(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    """Get all leads enrolled in a campaign"""
-    lead_campaigns = db.query(LeadCampaign).filter(
+    """Get all leads enrolled in a campaign with full lead details"""
+    # Verify campaign exists
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    # Join LeadCampaign with Lead to get full lead information
+    lead_campaigns = db.query(
+        LeadCampaign.id,
+        LeadCampaign.lead_id,
+        LeadCampaign.sequence_id,
+        LeadCampaign.current_step,
+        LeadCampaign.status,
+        LeadCampaign.started_at,
+        LeadCampaign.next_send_at,
+        LeadCampaign.last_sent_at,
+        Lead.first_name,
+        Lead.last_name,
+        Lead.email,
+        Lead.company,
+        Lead.status.label('lead_status')
+    ).join(Lead, LeadCampaign.lead_id == Lead.id).filter(
         LeadCampaign.sequence_id == campaign_id
     ).all()
-    return lead_campaigns
+    
+    # Convert to response objects
+    return [
+        EnrolledLeadResponse(
+            id=lc.id,
+            lead_id=lc.lead_id,
+            sequence_id=lc.sequence_id,
+            current_step=lc.current_step,
+            status=lc.status,
+            started_at=lc.started_at,
+            next_send_at=lc.next_send_at,
+            last_sent_at=lc.last_sent_at,
+            first_name=lc.first_name,
+            last_name=lc.last_name,
+            email=lc.email,
+            company=lc.company,
+            lead_status=lc.lead_status
+        ) for lc in lead_campaigns
+    ]
 
 @router.get("/all/progress", response_model=List[CampaignProgressSummary])
 def get_campaigns_progress(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     """Get progress stats for all campaigns (for dashboard)"""
     try:
         campaigns = db.query(Campaign).filter(Campaign.status == "active").all()
-        print(f"Found {len(campaigns)} active campaigns")
+        logger.debug(f"Found {len(campaigns)} active campaigns", extra={"campaign_count": len(campaigns)})
         
         progress_data = []
         for campaign in campaigns:
@@ -295,7 +450,12 @@ def get_campaigns_progress(db: Session = Depends(get_db), current_user: User = D
                 # Also ensure created_at is valid
                 safe_created_at = campaign.created_at if campaign.created_at is not None else datetime.utcnow()
                 
-                print(f"Campaign {safe_id}: leads={safe_total_leads}, sent={safe_emails_sent}, opened={safe_emails_opened}")
+                logger.debug(f"Campaign {safe_id}: leads={safe_total_leads}, sent={safe_emails_sent}, opened={safe_emails_opened}", extra={
+                    "campaign_id": safe_id,
+                    "total_leads": safe_total_leads, 
+                    "emails_sent": safe_emails_sent,
+                    "emails_opened": safe_emails_opened
+                })
                 
                 progress_data.append(CampaignProgressSummary(
                     id=safe_id,
@@ -313,13 +473,20 @@ def get_campaigns_progress(db: Session = Depends(get_db), current_user: User = D
                     created_at=safe_created_at
                 ))
             except Exception as e:
-                print(f"Error processing campaign {campaign.id}: {e}")
+                logger.error(f"Error processing campaign {campaign.id}: {e}", extra={
+                    "campaign_id": campaign.id,
+                    "error": str(e),
+                    "error_type": type(e).__name__
+                }, exc_info=True)
                 continue
         
         return progress_data
     
     except Exception as e:
-        print(f"Error in get_campaigns_progress: {e}")
+        logger.error(f"Error in get_campaigns_progress: {e}", extra={
+            "error": str(e),
+            "error_type": type(e).__name__
+        }, exc_info=True)
         return []
 
 @router.get("/{campaign_id}/progress", response_model=CampaignProgress)
@@ -374,6 +541,43 @@ def remove_lead_from_campaign(campaign_id: int, lead_id: int, db: Session = Depe
     db.commit()
     
     return {"message": "Lead removed from campaign"}
+
+@router.post("/{campaign_id}/pause")
+def pause_campaign(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Pause a campaign - no emails will be sent while paused"""
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    if campaign.status == "paused":
+        raise HTTPException(status_code=400, detail="Campaign is already paused")
+    
+    if campaign.status != "active":
+        raise HTTPException(status_code=400, detail="Can only pause active campaigns")
+    
+    campaign.status = "paused"
+    campaign.updated_at = datetime.utcnow()
+    db.commit()
+    
+    logger.info(f"Campaign {campaign_id} paused by user {current_user.id}")
+    return {"message": "Campaign paused successfully", "status": "paused"}
+
+@router.post("/{campaign_id}/unpause")
+def unpause_campaign(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """Unpause a campaign - resume sending emails"""
+    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    if campaign.status != "paused":
+        raise HTTPException(status_code=400, detail="Campaign is not paused")
+    
+    campaign.status = "active"
+    campaign.updated_at = datetime.utcnow()
+    db.commit()
+    
+    logger.info(f"Campaign {campaign_id} unpaused by user {current_user.id}")
+    return {"message": "Campaign unpaused successfully", "status": "active"}
 
 @router.post("/send")
 def trigger_campaign_emails(db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
